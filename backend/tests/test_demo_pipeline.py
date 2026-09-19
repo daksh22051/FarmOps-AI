@@ -4,14 +4,30 @@ Verifies the complete autonomous pipeline across all scenarios, safety decisions
 """
 
 import pytest
+from unittest.mock import patch
 from httpx import AsyncClient
+from app.ai.provider import MockAIProvider
 
 
+@pytest.fixture(autouse=True)
+def use_mock_ai_for_deterministic_demo_tests(request):
+    """
+    Default demo pipeline tests use MockAIProvider for deterministic local execution.
+    Tests marked with @pytest.mark.live_ai execute with live Gemini provider.
+    """
+    if "live_ai" in request.keywords:
+        yield
+    else:
+        with patch("app.demo.runner.get_ai_provider", return_value=MockAIProvider()):
+            yield
+
+
+@pytest.mark.live_ai
 @pytest.mark.asyncio
 async def test_01_complete_deterministic_demo_pipeline_succeeds(client: AsyncClient, auth_headers: dict):
     """
-    Test complete end-to-end water stress demo pipeline via POST /api/v1/demo/run.
-    Validates Telemetry -> Risk -> AI -> Safety Gating -> ActionPlan -> Task Execution -> Reassessment.
+    Live AI test: executes complete water stress demo pipeline against live Gemini API.
+    Validates Telemetry -> Risk -> Live AI -> Safety Gating -> ActionPlan -> Task Execution -> Reassessment.
     """
     payload = {
         "scenario": "water_stress",

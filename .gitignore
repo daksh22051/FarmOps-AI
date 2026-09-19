@@ -1,22 +1,57 @@
-﻿# Dependencies and build outputs
+# Dependencies and build outputs
 node_modules/
 .next/
 out/
 build/
+dist/
 frontend/node_modules/
 frontend/.next/
 frontend/out/
 frontend/build/
 
-# Local environment files
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment Variables
+.env
 .env*
 !.env.example
+!backend/.env.example
 frontend/.env*
 !frontend/.env.example
+backend/.env
+backend/.env*
+!backend/.env.example
 
-# TypeScript, caches, and local tooling state
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
 *.tsbuildinfo
-.DS_Store
 .kilo/
 .kaggle/
 kaggle.json
@@ -28,3 +63,16 @@ data/generated/
 data/cache/
 public/datasets/
 frontend/public/datasets/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Database / SQLite local scratch
+*.sqlite3
+*.db
+
+# OS
+.DS_Store
+Thumbs.db

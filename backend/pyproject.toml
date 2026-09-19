@@ -29,6 +29,10 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = "test_*.py"
 pythonpath = ["."]
+addopts = "-m 'not live_ai'"
+markers = [
+    "live_ai: marks tests as live Gemini AI integration tests requiring external API quota",
+]
 
 [tool.setuptools]
 packages = ["app"]

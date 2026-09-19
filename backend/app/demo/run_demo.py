@@ -10,7 +10,7 @@ import sys
 import asyncio
 import argparse
 import json
-from app.core.database import AsyncSessionLocal
+from app.core.database import get_session_factory
 from app.core.security import AuthUser
 from app.demo.schemas import DemoRunRequest
 from app.demo.runner import DemoRunner
@@ -49,7 +49,8 @@ async def main():
         auto_approve=not args.no_auto_approve,
     )
 
-    async with AsyncSessionLocal() as session:
+    factory = get_session_factory()
+    async with factory() as session:
         result = await DemoRunner.run_pipeline(
             session=session,
             user=cli_user,

@@ -285,8 +285,10 @@ def test_14_safe_advisory_proposal_can_pass():
     assert result.decision == PolicyDecision.ALLOW
 
 
+@pytest.mark.live_ai
 @pytest.mark.asyncio
 async def test_15_ai_never_directly_executes_device_actions(client: AsyncClient, auth_headers: dict, db_session: AsyncSession):
+    """Live AI test: verifies endpoint execution against live Gemini API does not alter device states."""
     farm_res = await client.post("/api/v1/farms", json={"name": "Actuator Safety Farm"}, headers=auth_headers)
     farm_id = farm_res.json()["data"]["id"]
 
@@ -358,8 +360,10 @@ async def test_18_market_context_unavailable_does_not_fabricate_prices():
 # 6. AUDIT TRAILS & OPENAPI DOCUMENTATION
 # ==============================================================================
 
+@pytest.mark.live_ai
 @pytest.mark.asyncio
 async def test_19_audit_event_generated_on_ai_evaluation(client: AsyncClient, auth_headers: dict, db_session: AsyncSession):
+    """Live AI test: verifies audit event creation after live Gemini evaluation."""
     farm_res = await client.post("/api/v1/farms", json={"name": "AI Audit Farm"}, headers=auth_headers)
     farm_id = farm_res.json()["data"]["id"]
 

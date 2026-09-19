@@ -259,7 +259,7 @@ async def test_06_task_execution_lifecycle_and_risk_reassessment_trigger(
 
     # Trigger risk detection to get a real RiskAssessment ID
     eval_res = await client.post(
-        "/api/v1/risks/evaluate",
+        "/api/v1/risks/detect",
         json={"farm_id": farm_id, "telemetry_override": {"soil_moisture": 16.0}},
         headers=auth_headers,
     )

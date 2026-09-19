@@ -6,8 +6,10 @@ import pytest
 from httpx import AsyncClient
 
 
+@pytest.mark.live_ai
 @pytest.mark.asyncio
 async def test_risk_evaluation_safety_and_approval_flow(client: AsyncClient, auth_headers: dict):
+    """Live AI test: executes multi-agent risk assessment & plan synthesis against live Gemini."""
     # 1. Create farm & zone
     farm_res = await client.post("/api/v1/farms", json={"name": "Autonomous Intelligence Farm"}, headers=auth_headers)
     farm_id = farm_res.json()["data"]["id"]

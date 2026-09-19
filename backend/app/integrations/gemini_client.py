@@ -24,8 +24,8 @@ class GeminiClient:
         timeout: float = 12.0,
         max_retries: int = 2,
     ):
-        self.api_key = api_key or settings.GEMINI_API_KEY
-        self.model = model or settings.GEMINI_MODEL or "gemini-2.5-flash"
+        self.api_key = api_key if api_key is not None else settings.GEMINI_API_KEY
+        self.model = model if model is not None else (settings.GEMINI_MODEL or "gemini-2.5-flash")
         self.timeout = timeout
         self.max_retries = max_retries
         self._genai_client = None

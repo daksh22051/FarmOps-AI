@@ -624,11 +624,30 @@ export interface Alert {
   created_at: string; // ISO-8601
 }
 
+export interface AlertAcknowledgeRequest {
+  acknowledged_by?: string;
+}
+
 // ==========================================
 // 12. ESCALATIONS & EXPERT REVIEW
 // ==========================================
 
 export type EscalationStatus = "open" | "in_review" | "resolved" | "rejected";
+
+export interface EscalationCreate {
+  farm_id: string;
+  zone_id?: string | null;
+  risk_id?: string | null;
+  plan_id?: string | null;
+  reason: string;
+}
+
+export interface EscalationReviewRequest {
+  assigned_expert_id?: string | null;
+  review_notes: string;
+  review_outcome: string;
+  status?: "resolved" | "rejected" | "in_review" | string;
+}
 
 export interface Escalation {
   id: string;

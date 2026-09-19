@@ -21,11 +21,14 @@ import type {
   TaskCreate,
   TaskUpdate,
   Alert,
+  AlertAcknowledgeRequest,
+  Escalation,
+  EscalationCreate,
+  EscalationReviewRequest,
   AuditEvent,
   DemoRunResult,
   DemoStatusResponse,
   HealthResponse,
-  PaginatedResponse,
   APIResponse,
   AIEvaluationRequest,
   AIEvaluationResponse,
@@ -318,14 +321,14 @@ export async function updateTask(
 export async function getAlerts(
   farmId: string,
   params?: {
+    zone_id?: string;
     severity?: string;
-    is_acknowledged?: boolean;
-    page?: number;
-    page_size?: number;
+    acknowledged?: boolean;
+    limit?: number;
   },
   options?: RequestOptions
-): Promise<APIResponse<PaginatedResponse<Alert>>> {
-  return apiClient.get<PaginatedResponse<Alert>>(`/alerts/${farmId}`, {
+): Promise<APIResponse<Alert[]>> {
+  return apiClient.get<Alert[]>(`/alerts/${farmId}`, {
     ...options,
     params: params as Record<string, string | number | boolean | undefined | null>,
   });
@@ -333,28 +336,58 @@ export async function getAlerts(
 
 export async function acknowledgeAlert(
   alertId: string,
-  data?: { acknowledged_by?: string },
+  data?: AlertAcknowledgeRequest,
   options?: RequestOptions
 ): Promise<APIResponse<Alert>> {
   return apiClient.post<Alert>(`/alerts/${alertId}/acknowledge`, data || {}, options);
 }
 
 // ==========================================
-// 12. AUDIT TIMELINE
+// 12. ESCALATIONS & EXPERT REVIEW
+// ==========================================
+
+export async function getEscalations(
+  farmId: string,
+  params?: {
+    status?: string;
+    limit?: number;
+  },
+  options?: RequestOptions
+): Promise<APIResponse<Escalation[]>> {
+  return apiClient.get<Escalation[]>(`/escalations/${farmId}`, {
+    ...options,
+    params: params as Record<string, string | number | boolean | undefined | null>,
+  });
+}
+
+export async function createEscalation(
+  data: EscalationCreate,
+  options?: RequestOptions
+): Promise<APIResponse<Escalation>> {
+  return apiClient.post<Escalation>("/escalations", data, options);
+}
+
+export async function reviewEscalation(
+  escalationId: string,
+  data: EscalationReviewRequest,
+  options?: RequestOptions
+): Promise<APIResponse<Escalation>> {
+  return apiClient.post<Escalation>(`/escalations/${escalationId}/review`, data, options);
+}
+
+// ==========================================
+// 13. AUDIT TIMELINE
 // ==========================================
 
 export async function getAuditEvents(
   farmId?: string,
   params?: {
-    entity_type?: string;
-    entity_id?: string;
-    actor_id?: string;
-    page?: number;
-    page_size?: number;
+    limit?: number;
+    offset?: number;
   },
   options?: RequestOptions
-): Promise<APIResponse<PaginatedResponse<AuditEvent>>> {
-  return apiClient.get<PaginatedResponse<AuditEvent>>("/audit", {
+): Promise<APIResponse<AuditEvent[]>> {
+  return apiClient.get<AuditEvent[]>("/audit", {
     ...options,
     params: { ...(farmId ? { farm_id: farmId } : {}), ...(params || {}) },
   });

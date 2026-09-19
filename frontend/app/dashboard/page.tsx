@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Database,
-  History,
   ShieldAlert,
 } from "lucide-react";
 import { AppShell } from "../../components/app-shell";
@@ -13,6 +12,7 @@ import { getDashboardDatasetBundle } from "../../lib/data/server";
 import { DatasetExplorer } from "./dataset-explorer";
 import { FarmOverviewCard } from "./farm-overview-card";
 import { TelemetryOverview } from "./telemetry-overview";
+import { RecentActivity } from "./recent-activity";
 
 export default async function DashboardPage() {
   const bundle = await getDashboardDatasetBundle();
@@ -82,13 +82,7 @@ export default async function DashboardPage() {
 
       <section className="mt-8" aria-labelledby="activity-heading">
         <SectionHeading id="activity-heading" title="Recent activity" description="Farm decisions, work, and reassessments" />
-        <Card className="mt-4">
-          <EmptyState
-            icon={History}
-            title="No activity history yet"
-            description="Timeline events will appear here after the farm is configured and verified records are available."
-          />
-        </Card>
+        <RecentActivity />
       </section>
     </AppShell>
   );
@@ -136,27 +130,5 @@ function OverviewSection({
         </div>
       </div>
     </Card>
-  );
-}
-
-function EmptyState({
-  icon: Icon,
-  title,
-  description,
-  roomy = false,
-}: {
-  icon: LucideIcon;
-  title: string;
-  description: string;
-  roomy?: boolean;
-}) {
-  return (
-    <div className={`flex flex-col items-center justify-center px-5 text-center ${roomy ? "min-h-72 py-10" : "py-8"}`}>
-      <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#f1f4ef] text-slate-500">
-        <Icon aria-hidden="true" size={23} />
-      </span>
-      <h3 className="mt-4 text-sm font-semibold text-ink">{title}</h3>
-      <p className="mt-2 max-w-lg text-sm leading-6 text-slate-500">{description}</p>
-    </div>
   );
 }

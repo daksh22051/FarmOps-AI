@@ -1,0 +1,353 @@
+import { apiClient, type RequestOptions } from "./client";
+import type {
+  UserProfile,
+  Farm,
+  FarmCreate,
+  FarmUpdate,
+  Zone,
+  ZoneCreate,
+  ZoneUpdate,
+  Device,
+  DeviceCreate,
+  DeviceUpdate,
+  TelemetryEvent,
+  ExternalObservation,
+  RiskAssessment,
+  ActionPlan,
+  Task,
+  TaskUpdate,
+  Alert,
+  AuditEvent,
+  DemoRunResult,
+  DemoStatusResponse,
+  HealthResponse,
+  PaginatedResponse,
+  APIResponse,
+  AIEvaluationRequest,
+  AIEvaluationResponse,
+  DemoScenario,
+} from "../../types/api";
+
+// ==========================================
+// 1. AUTHENTICATION
+// ==========================================
+
+export async function getCurrentUser(options?: RequestOptions): Promise<APIResponse<UserProfile>> {
+  return apiClient.get<UserProfile>("/auth/me", options);
+}
+
+// ==========================================
+// 2. FARMS
+// ==========================================
+
+export async function getFarms(options?: RequestOptions): Promise<APIResponse<Farm[]>> {
+  return apiClient.get<Farm[]>("/farms", options);
+}
+
+export async function getFarm(farmId: string, options?: RequestOptions): Promise<APIResponse<Farm>> {
+  return apiClient.get<Farm>(`/farms/${farmId}`, options);
+}
+
+export async function createFarm(data: FarmCreate, options?: RequestOptions): Promise<APIResponse<Farm>> {
+  return apiClient.post<Farm>("/farms", data, options);
+}
+
+export async function updateFarm(farmId: string, data: FarmUpdate, options?: RequestOptions): Promise<APIResponse<Farm>> {
+  return apiClient.patch<Farm>(`/farms/${farmId}`, data, options);
+}
+
+export async function deleteFarm(farmId: string, options?: RequestOptions): Promise<APIResponse<null>> {
+  return apiClient.delete<null>(`/farms/${farmId}`, options);
+}
+
+// ==========================================
+// 3. ZONES
+// ==========================================
+
+export async function getZones(farmId: string, options?: RequestOptions): Promise<APIResponse<Zone[]>> {
+  return apiClient.get<Zone[]>(`/farms/${farmId}/zones`, options);
+}
+
+export async function createZone(farmId: string, data: ZoneCreate, options?: RequestOptions): Promise<APIResponse<Zone>> {
+  return apiClient.post<Zone>(`/farms/${farmId}/zones`, data, options);
+}
+
+export async function getZone(zoneId: string, options?: RequestOptions): Promise<APIResponse<Zone>> {
+  return apiClient.get<Zone>(`/zones/${zoneId}`, options);
+}
+
+export async function updateZone(zoneId: string, data: ZoneUpdate, options?: RequestOptions): Promise<APIResponse<Zone>> {
+  return apiClient.patch<Zone>(`/zones/${zoneId}`, data, options);
+}
+
+// ==========================================
+// 4. DEVICES
+// ==========================================
+
+export async function getDevices(farmId: string, options?: RequestOptions): Promise<APIResponse<Device[]>> {
+  return apiClient.get<Device[]>(`/farms/${farmId}/devices`, options);
+}
+
+export async function createDevice(farmId: string, data: DeviceCreate, options?: RequestOptions): Promise<APIResponse<Device>> {
+  return apiClient.post<Device>(`/farms/${farmId}/devices`, data, options);
+}
+
+export async function getDevice(deviceId: string, options?: RequestOptions): Promise<APIResponse<Device>> {
+  return apiClient.get<Device>(`/devices/${deviceId}`, options);
+}
+
+export async function updateDevice(deviceId: string, data: DeviceUpdate, options?: RequestOptions): Promise<APIResponse<Device>> {
+  return apiClient.patch<Device>(`/devices/${deviceId}`, data, options);
+}
+
+// ==========================================
+// 5. TELEMETRY
+// ==========================================
+
+export async function getTelemetryEvents(
+  farmId: string,
+  params?: {
+    zone_id?: string;
+    event_type?: string;
+    start_time?: string;
+    end_time?: string;
+    limit?: number;
+    offset?: number;
+  },
+  options?: RequestOptions
+): Promise<APIResponse<TelemetryEvent[]>> {
+  return apiClient.get<TelemetryEvent[]>(`/telemetry/${farmId}/events`, {
+    ...options,
+    params: params as Record<string, string | number | boolean | undefined | null>,
+  });
+}
+
+// ==========================================
+// 6. EXTERNAL OBSERVATIONS
+// ==========================================
+
+export async function getObservations(farmId: string, options?: RequestOptions): Promise<APIResponse<ExternalObservation[]>> {
+  return apiClient.get<ExternalObservation[]>(`/observations/farm/${farmId}`, options);
+}
+
+// ==========================================
+// 7. RISKS
+// ==========================================
+
+export async function getRisks(
+  farmId: string,
+  params?: {
+    zone_id?: string;
+    severity?: string;
+    status?: string;
+    page?: number;
+    page_size?: number;
+  },
+  options?: RequestOptions
+): Promise<APIResponse<PaginatedResponse<RiskAssessment>>> {
+  return apiClient.get<PaginatedResponse<RiskAssessment>>(`/farms/${farmId}/risks`, {
+    ...options,
+    params: params as Record<string, string | number | boolean | undefined | null>,
+  });
+}
+
+export async function getRiskDetail(riskId: string, options?: RequestOptions): Promise<APIResponse<RiskAssessment>> {
+  return apiClient.get<RiskAssessment>(`/risks/detail/${riskId}`, options);
+}
+
+export async function evaluateRisks(
+  data: { farm_id: string; zone_id?: string | null; telemetry_override?: Record<string, unknown> | null },
+  options?: RequestOptions
+): Promise<APIResponse<RiskAssessment[]>> {
+  return apiClient.post<RiskAssessment[]>("/risks/evaluate", data, options);
+}
+
+// ==========================================
+// 8. AI EVALUATION
+// ==========================================
+
+export async function evaluateRiskWithAI(
+  data: AIEvaluationRequest,
+  options?: RequestOptions
+): Promise<APIResponse<AIEvaluationResponse>> {
+  return apiClient.post<AIEvaluationResponse>("/ai/evaluate-risk", data, options);
+}
+
+// ==========================================
+// 9. ACTION PLANS
+// ==========================================
+
+export async function getActionPlans(
+  farmId: string,
+  params?: {
+    status?: string;
+    zone_id?: string;
+    page?: number;
+    page_size?: number;
+  },
+  options?: RequestOptions
+): Promise<APIResponse<PaginatedResponse<ActionPlan>>> {
+  return apiClient.get<PaginatedResponse<ActionPlan>>(`/farms/${farmId}/action-plans`, {
+    ...options,
+    params: params as Record<string, string | number | boolean | undefined | null>,
+  });
+}
+
+export async function getActionPlan(actionPlanId: string, options?: RequestOptions): Promise<APIResponse<ActionPlan>> {
+  return apiClient.get<ActionPlan>(`/action-plans/${actionPlanId}`, options);
+}
+
+export async function approveActionPlan(
+  actionPlanId: string,
+  data?: { review_notes?: string | null; notes?: string | null },
+  options?: RequestOptions
+): Promise<APIResponse<ActionPlan>> {
+  return apiClient.post<ActionPlan>(`/action-plans/${actionPlanId}/approve`, data || {}, options);
+}
+
+export async function rejectActionPlan(
+  actionPlanId: string,
+  data?: { review_notes?: string | null; notes?: string | null },
+  options?: RequestOptions
+): Promise<APIResponse<ActionPlan>> {
+  return apiClient.post<ActionPlan>(`/action-plans/${actionPlanId}/reject`, data || {}, options);
+}
+
+// ==========================================
+// 10. FIELD TASKS
+// ==========================================
+
+export async function getTasks(
+  farmId: string,
+  params?: {
+    status?: string;
+    zone_id?: string;
+    page?: number;
+    page_size?: number;
+  },
+  options?: RequestOptions
+): Promise<APIResponse<PaginatedResponse<Task>>> {
+  return apiClient.get<PaginatedResponse<Task>>(`/farms/${farmId}/tasks`, {
+    ...options,
+    params: params as Record<string, string | number | boolean | undefined | null>,
+  });
+}
+
+export async function getTaskDetail(taskId: string, options?: RequestOptions): Promise<APIResponse<Task>> {
+  return apiClient.get<Task>(`/tasks/detail/${taskId}`, options);
+}
+
+export async function startTask(
+  taskId: string,
+  data?: { notes?: string | null },
+  options?: RequestOptions
+): Promise<APIResponse<Task>> {
+  return apiClient.post<Task>(`/tasks/${taskId}/start`, data || {}, options);
+}
+
+export async function completeTask(
+  taskId: string,
+  data?: { completion_notes?: string | null; completed_by?: string | null },
+  options?: RequestOptions
+): Promise<APIResponse<Task>> {
+  return apiClient.post<Task>(`/tasks/${taskId}/complete`, data || {}, options);
+}
+
+export async function cancelTask(
+  taskId: string,
+  data?: { reason?: string | null },
+  options?: RequestOptions
+): Promise<APIResponse<Task>> {
+  return apiClient.post<Task>(`/tasks/${taskId}/cancel`, data || {}, options);
+}
+
+export async function updateTask(
+  taskId: string,
+  data: TaskUpdate,
+  options?: RequestOptions
+): Promise<APIResponse<Task>> {
+  return apiClient.patch<Task>(`/tasks/${taskId}`, data, options);
+}
+
+// ==========================================
+// 11. ALERTS
+// ==========================================
+
+export async function getAlerts(
+  farmId: string,
+  params?: {
+    severity?: string;
+    is_acknowledged?: boolean;
+    page?: number;
+    page_size?: number;
+  },
+  options?: RequestOptions
+): Promise<APIResponse<PaginatedResponse<Alert>>> {
+  return apiClient.get<PaginatedResponse<Alert>>(`/alerts/${farmId}`, {
+    ...options,
+    params: params as Record<string, string | number | boolean | undefined | null>,
+  });
+}
+
+export async function acknowledgeAlert(
+  alertId: string,
+  data?: { acknowledged_by?: string },
+  options?: RequestOptions
+): Promise<APIResponse<Alert>> {
+  return apiClient.post<Alert>(`/alerts/${alertId}/acknowledge`, data || {}, options);
+}
+
+// ==========================================
+// 12. AUDIT TIMELINE
+// ==========================================
+
+export async function getAuditEvents(
+  farmId?: string,
+  params?: {
+    entity_type?: string;
+    entity_id?: string;
+    actor_id?: string;
+    page?: number;
+    page_size?: number;
+  },
+  options?: RequestOptions
+): Promise<APIResponse<PaginatedResponse<AuditEvent>>> {
+  return apiClient.get<PaginatedResponse<AuditEvent>>("/audit", {
+    ...options,
+    params: { ...(farmId ? { farm_id: farmId } : {}), ...(params || {}) },
+  });
+}
+
+// ==========================================
+// 13. ONE-CLICK DEMO PIPELINE
+// ==========================================
+
+export async function runDemo(
+  scenario: DemoScenario | string = "water_stress",
+  options?: {
+    auto_approve?: boolean;
+    force_approval_required?: boolean;
+    farm_name?: string;
+    zone_name?: string;
+    telemetry_override?: Record<string, unknown> | null;
+  },
+  requestOptions?: RequestOptions
+): Promise<APIResponse<DemoRunResult>> {
+  return apiClient.post<DemoRunResult>("/demo/run", { scenario, ...(options || {}) }, requestOptions);
+}
+
+export async function getDemoStatus(options?: RequestOptions): Promise<APIResponse<DemoStatusResponse>> {
+  return apiClient.get<DemoStatusResponse>("/demo/status", options);
+}
+
+// ==========================================
+// 14. HEALTH CHECKS
+// ==========================================
+
+export async function getHealth(options?: RequestOptions): Promise<APIResponse<HealthResponse>> {
+  return apiClient.get<HealthResponse>("/health", options);
+}
+
+export async function getDbHealth(options?: RequestOptions): Promise<APIResponse<Record<string, unknown>>> {
+  return apiClient.get<Record<string, unknown>>("/health/db", options);
+}

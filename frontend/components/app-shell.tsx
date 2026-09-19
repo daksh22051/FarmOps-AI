@@ -1,17 +1,25 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Bell, ChevronRight, Menu, Sprout, X } from "lucide-react";
+import { Bell, ChevronRight, Menu, X } from "lucide-react";
 import { useState } from "react";
 import { navItems } from "./navigation";
 import { useFarm } from "../context/farm-context";
 
-function Logo() {
+function Logo({ className = "h-10 w-10" }: { className?: string }) {
   return (
-    <span className="grid h-9 w-9 place-items-center rounded-xl bg-forest-700 text-white shadow-sm">
-      <Sprout aria-hidden="true" size={20} />
-    </span>
+    <div className={`relative shrink-0 overflow-hidden rounded-xl border border-forest-100 bg-white shadow-sm ring-1 ring-forest-700/10 ${className}`}>
+      <Image
+        src="/logo.png"
+        alt="FarmOps AI Logo"
+        width={48}
+        height={48}
+        className="h-full w-full object-cover"
+        priority
+      />
+    </div>
   );
 }
 

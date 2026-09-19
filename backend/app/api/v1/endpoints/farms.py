@@ -1,9 +1,9 @@
 """
-Farm, Zone, and FarmMembership Endpoints with Farm-Scoped Authorization
+Farm, Zone, and Device Operational Management Endpoints (/api/v1/farms)
 """
 
-from typing import List
-from fastapi import APIRouter, Depends, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import (
@@ -13,6 +13,8 @@ from app.core.security import (
     verify_zone_access,
 )
 from app.services.farm_service import FarmService
+from app.services.zone_service import ZoneService
+from app.services.device_service import DeviceService
 from app.services.audit_service import AuditService
 from app.schemas.farm import (
     FarmCreate,
@@ -23,18 +25,22 @@ from app.schemas.farm import (
     ZoneCreate,
     ZoneResponse,
 )
+from app.schemas.device import DeviceCreate, DeviceResponse
 from app.schemas.common import APIResponse
 
-router = APIRouter(prefix="/farms", tags=["Farms, Zones & Memberships"])
+router = APIRouter(prefix="/farms", tags=["Farms, Zones & Devices"])
 
 
+# --- FARM MANAGEMENT ---
 @router.post("", response_model=APIResponse[FarmResponse], status_code=status.HTTP_201_CREATED)
 async def create_farm(
     payload: FarmCreate,
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    """Creates a new farm with the authenticated user as the owner."""
+    """
+    Creates a new operational farm with the authenticated caller automatically assigned as owner.
+    """
     farm = await FarmService.create_farm(db, owner_id=user.id, data=payload)
     await AuditService.log_event(
         session=db,
@@ -43,7 +49,7 @@ async def create_farm(
         farm_id=farm.id,
         entity_id=farm.id,
         actor_id=user.id,
-        after_state={"name": farm.name},
+        after_state={"name": farm.name, "location": farm.location, "total_area": farm.total_area},
         source="user",
     )
     return APIResponse(success=True, data=FarmResponse.model_validate(farm), message="Farm created successfully")
@@ -51,13 +57,21 @@ async def create_farm(
 
 @router.get("", response_model=APIResponse[List[FarmResponse]])
 async def list_farms(
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    """Lists all farms the authenticated user owns or is a member of (or all if ADMIN)."""
+    """
+    Lists farms accessible to the authenticated user with pagination.
+    """
     filter_user_id = None if user.is_admin else user.id
-    farms = await FarmService.get_farms(db, user_id=filter_user_id)
-    return APIResponse(success=True, data=[FarmResponse.model_validate(f) for f in farms])
+    farms, total = await FarmService.get_farms(db, user_id=filter_user_id, page=page, page_size=page_size)
+    return APIResponse(
+        success=True,
+        data=[FarmResponse.model_validate(f) for f in farms],
+        message=f"Retrieved {len(farms)} of {total} farms",
+    )
 
 
 @router.get("/{farm_id}", response_model=APIResponse[FarmResponse])
@@ -66,20 +80,20 @@ async def get_farm(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    """Retrieves farm details, strictly checking farm membership."""
+    """Retrieves single farm details with farm membership verification."""
     await check_farm_access(db, farm_id=farm_id, user=user)
     farm = await FarmService.get_farm(db, farm_id=farm_id)
     return APIResponse(success=True, data=FarmResponse.model_validate(farm))
 
 
-@router.put("/{farm_id}", response_model=APIResponse[FarmResponse])
-async def update_farm(
+@router.patch("/{farm_id}", response_model=APIResponse[FarmResponse])
+async def patch_farm(
     farm_id: str,
     payload: FarmUpdate,
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    """Updates farm settings. Requires owner or manager role."""
+    """Partially updates farm configuration. Requires owner or manager role."""
     await check_farm_access(db, farm_id=farm_id, user=user, allowed_roles=["owner", "manager"])
     farm = await FarmService.update_farm(db, farm_id=farm_id, data=payload)
     await AuditService.log_event(
@@ -89,9 +103,21 @@ async def update_farm(
         farm_id=farm.id,
         entity_id=farm.id,
         actor_id=user.id,
+        after_state=payload.model_dump(exclude_unset=True),
         source="user",
     )
     return APIResponse(success=True, data=FarmResponse.model_validate(farm), message="Farm updated successfully")
+
+
+@router.put("/{farm_id}", response_model=APIResponse[FarmResponse])
+async def put_farm(
+    farm_id: str,
+    payload: FarmUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Full update for farm. Requires owner or manager role."""
+    return await patch_farm(farm_id=farm_id, payload=payload, db=db, user=user)
 
 
 @router.delete("/{farm_id}", response_model=APIResponse[bool])
@@ -115,7 +141,7 @@ async def delete_farm(
     return APIResponse(success=True, data=True, message="Farm deleted successfully")
 
 
-# --- ZONES ---
+# --- ZONES UNDER FARM ---
 @router.post("/{farm_id}/zones", response_model=APIResponse[ZoneResponse], status_code=status.HTTP_201_CREATED)
 async def create_zone(
     farm_id: str,
@@ -123,9 +149,9 @@ async def create_zone(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    """Creates a zone within a farm. Requires owner or manager role."""
+    """Creates a zone within a designated farm. Requires owner or manager role."""
     await check_farm_access(db, farm_id=farm_id, user=user, allowed_roles=["owner", "manager"])
-    zone = await FarmService.create_zone(db, farm_id=farm_id, data=payload)
+    zone = await ZoneService.create_zone(db, farm_id=farm_id, data=payload)
     await AuditService.log_event(
         session=db,
         event_type="create_zone",
@@ -133,7 +159,7 @@ async def create_zone(
         farm_id=farm_id,
         entity_id=zone.id,
         actor_id=user.id,
-        after_state={"name": zone.name},
+        after_state={"name": zone.name, "area": zone.area, "crop": zone.crop},
         source="user",
     )
     return APIResponse(success=True, data=ZoneResponse.model_validate(zone), message="Zone created successfully")
@@ -145,24 +171,68 @@ async def list_zones(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    """Lists zones in a farm. Verifies user has access to this farm."""
+    """Lists zones within a farm. Verifies farm access."""
     await check_farm_access(db, farm_id=farm_id, user=user)
-    zones = await FarmService.get_zones(db, farm_id=farm_id)
+    zones = await ZoneService.get_zones(db, farm_id=farm_id)
     return APIResponse(success=True, data=[ZoneResponse.model_validate(z) for z in zones])
 
 
 @router.get("/zones/{zone_id}", response_model=APIResponse[ZoneResponse])
-async def get_zone(
+async def get_farm_zone_alias(
     zone_id: str,
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    """Retrieves single zone. Verifies user has access to owning farm."""
+    """Alias for direct zone retrieval under /farms prefix."""
     zone = await verify_zone_access(zone_id=zone_id, db=db, user=user)
     return APIResponse(success=True, data=ZoneResponse.model_validate(zone))
 
 
-# --- MEMBERSHIPS ---
+# --- DEVICES UNDER FARM ---
+@router.post("/{farm_id}/devices", response_model=APIResponse[DeviceResponse], status_code=status.HTTP_201_CREATED)
+async def register_device(
+    farm_id: str,
+    payload: DeviceCreate,
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Registers a hardware device / sensor node to a farm. Requires owner or manager role."""
+    await check_farm_access(db, farm_id=farm_id, user=user, allowed_roles=["owner", "manager"])
+    device = await DeviceService.create_device(db, farm_id=farm_id, data=payload)
+    await AuditService.log_event(
+        session=db,
+        event_type="register_device",
+        entity_type="device",
+        farm_id=farm_id,
+        entity_id=device.id,
+        actor_id=user.id,
+        after_state={"device_type": device.device_type, "zone_id": device.zone_id, "is_demo": payload.is_demo},
+        source="user",
+    )
+    return APIResponse(
+        success=True,
+        data=DeviceResponse.from_orm_device(device),
+        message="Device registered successfully",
+    )
+
+
+@router.get("/{farm_id}/devices", response_model=APIResponse[List[DeviceResponse]])
+async def list_devices(
+    farm_id: str,
+    zone_id: Optional[str] = Query(None, description="Filter by zone ID"),
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Lists devices registered to a farm. Verifies farm access."""
+    await check_farm_access(db, farm_id=farm_id, user=user)
+    devices = await DeviceService.get_devices(db, farm_id=farm_id, zone_id=zone_id)
+    return APIResponse(
+        success=True,
+        data=[DeviceResponse.from_orm_device(d) for d in devices],
+    )
+
+
+# --- MEMBERSHIPS UNDER FARM ---
 @router.post("/{farm_id}/members", response_model=APIResponse[FarmMembershipResponse], status_code=status.HTTP_201_CREATED)
 async def add_membership(
     farm_id: str,
@@ -170,7 +240,7 @@ async def add_membership(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    """Adds a member to the farm. Restricted to owner or manager."""
+    """Grants farm membership. Requires owner or manager role."""
     await check_farm_access(db, farm_id=farm_id, user=user, allowed_roles=["owner", "manager"])
     membership = await FarmService.add_membership(db, farm_id=farm_id, data=payload)
     await AuditService.log_event(
@@ -192,7 +262,7 @@ async def list_memberships(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    """Lists members of a farm. Verifies caller has access to the farm."""
+    """Lists memberships for a farm. Verifies caller has access to the farm."""
     await check_farm_access(db, farm_id=farm_id, user=user)
     memberships = await FarmService.get_memberships(db, farm_id=farm_id)
     return APIResponse(success=True, data=[FarmMembershipResponse.model_validate(m) for m in memberships])

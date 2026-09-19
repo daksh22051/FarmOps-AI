@@ -1,11 +1,20 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react";
-import { getCurrentUser as apiGetCurrentUser, getFarms, getFarm, getZones, updateZone as apiUpdateZone } from "../lib/api/farmops";
+import {
+  getCurrentUser as apiGetCurrentUser,
+  getFarms,
+  getFarm,
+  getZones,
+  updateZone as apiUpdateZone,
+  getDevices,
+  getTelemetryEvents,
+} from "../lib/api/farmops";
 import { getCurrentSession, signOut as authSignOut } from "../lib/auth/session";
 import { createClient } from "../lib/supabase/client";
 import { ApiClientError } from "../lib/api/client";
-import type { Farm, Zone, ZoneUpdate, UserProfile } from "../types/api";
+import type { Farm, Zone, ZoneUpdate, UserProfile, Device, SensorEventResponse } from "../types/api";
+import { extractLatestMeasurements, type LatestMeasurement } from "../lib/telemetry";
 
 // ==========================================
 // DOMAIN TYPES
@@ -401,16 +410,25 @@ export interface FarmContextType {
   selectedFarmId: string | null;
   selectedFarm: Farm | null;
   backendZones: Zone[];
+  devices: Device[];
+  telemetryEvents: SensorEventResponse[];
+  latestTelemetry: Record<string, LatestMeasurement>;
   isLoadingFarms: boolean;
   isLoadingFarm: boolean;
   isLoadingZones: boolean;
+  isLoadingDevices: boolean;
+  isLoadingTelemetry: boolean;
   farmError: ApiClientError | Error | null;
   authError: ApiClientError | Error | null;
+  devicesError: ApiClientError | Error | null;
+  telemetryError: ApiClientError | Error | null;
   
   // Backend Actions
   selectFarm: (farmId: string) => Promise<void>;
   refreshFarms: () => Promise<void>;
   refreshZones: () => Promise<void>;
+  refreshDevices: () => Promise<void>;
+  refreshTelemetry: () => Promise<void>;
   updateBackendZone: (zoneId: string, data: ZoneUpdate) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   
@@ -486,6 +504,15 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
   const [farmError, setFarmError] = useState<ApiClientError | Error | null>(null);
   const [authError, setAuthError] = useState<ApiClientError | Error | null>(null);
 
+  // Devices & Telemetry state (FastAPI backend integration)
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [telemetryEvents, setTelemetryEvents] = useState<SensorEventResponse[]>([]);
+  const [latestTelemetry, setLatestTelemetry] = useState<Record<string, LatestMeasurement>>({});
+  const [isLoadingDevices, setIsLoadingDevices] = useState(false);
+  const [isLoadingTelemetry, setIsLoadingTelemetry] = useState(false);
+  const [devicesError, setDevicesError] = useState<ApiClientError | Error | null>(null);
+  const [telemetryError, setTelemetryError] = useState<ApiClientError | Error | null>(null);
+
   // Load from localStorage on client mount
   useEffect(() => {
     try {
@@ -526,28 +553,59 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     }
   }, [isHydrated, farm, settings, advisories, tasks, alerts, timeline]);
 
-  // Select a specific farm and load its details & zones
+  // Select a specific farm and load its details, zones, devices, and telemetry
   const selectFarm = useCallback(async (farmId: string) => {
     setSelectedFarmId(farmId);
     try {
       localStorage.setItem(SELECTED_FARM_STORAGE_KEY, farmId);
     } catch {}
 
-    setIsLoadingFarm(true);
-    setIsLoadingZones(true);
+    // 1. Immediately clear stale telemetry and device state to prevent cross-farm data bleeding
+    setDevices([]);
+    setTelemetryEvents([]);
+    setLatestTelemetry({});
+    setDevicesError(null);
+    setTelemetryError(null);
     setFarmError(null);
 
+    setIsLoadingFarm(true);
+    setIsLoadingZones(true);
+    setIsLoadingDevices(true);
+    setIsLoadingTelemetry(true);
+
     try {
-      const [farmRes, zonesRes] = await Promise.all([
+      const [farmRes, zonesRes, devicesRes, telemetryRes] = await Promise.allSettled([
         getFarm(farmId),
         getZones(farmId),
+        getDevices(farmId),
+        getTelemetryEvents(farmId, { limit: 100 }),
       ]);
 
-      if (farmRes.data) {
-        setSelectedFarm(farmRes.data);
+      if (farmRes.status === "fulfilled" && farmRes.value.data) {
+        setSelectedFarm(farmRes.value.data);
+      } else if (farmRes.status === "rejected") {
+        const err = farmRes.reason;
+        setFarmError(err instanceof Error ? err : new Error("Failed to load farm details"));
       }
-      if (zonesRes.data) {
-        setBackendZones(zonesRes.data);
+
+      if (zonesRes.status === "fulfilled" && zonesRes.value.data) {
+        setBackendZones(zonesRes.value.data);
+      }
+
+      if (devicesRes.status === "fulfilled" && devicesRes.value.data) {
+        setDevices(devicesRes.value.data);
+      } else if (devicesRes.status === "rejected") {
+        const err = devicesRes.reason;
+        setDevicesError(err instanceof Error ? err : new Error("Failed to load farm devices"));
+      }
+
+      if (telemetryRes.status === "fulfilled" && telemetryRes.value.data) {
+        const events = telemetryRes.value.data;
+        setTelemetryEvents(events);
+        setLatestTelemetry(extractLatestMeasurements(events));
+      } else if (telemetryRes.status === "rejected") {
+        const err = telemetryRes.reason;
+        setTelemetryError(err instanceof Error ? err : new Error("Failed to load farm telemetry"));
       }
     } catch (err: unknown) {
       console.error("Failed to select farm:", err);
@@ -559,6 +617,8 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsLoadingFarm(false);
       setIsLoadingZones(false);
+      setIsLoadingDevices(false);
+      setIsLoadingTelemetry(false);
     }
   }, []);
 
@@ -576,6 +636,9 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         setBackendFarms([]);
         setSelectedFarm(null);
         setBackendZones([]);
+        setDevices([]);
+        setTelemetryEvents([]);
+        setLatestTelemetry({});
         setIsLoadingFarms(false);
         return;
       }
@@ -605,6 +668,9 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         setSelectedFarmId(null);
         setSelectedFarm(null);
         setBackendZones([]);
+        setDevices([]);
+        setTelemetryEvents([]);
+        setLatestTelemetry({});
       }
     } catch (err: unknown) {
       console.error("Error loading backend farms:", err);
@@ -643,6 +709,47 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     }
   }, [selectedFarmId]);
 
+  const refreshDevices = useCallback(async () => {
+    if (!selectedFarmId) return;
+    setIsLoadingDevices(true);
+    setDevicesError(null);
+    try {
+      const res = await getDevices(selectedFarmId);
+      if (res.data) {
+        setDevices(res.data);
+      }
+    } catch (err: unknown) {
+      if (err instanceof ApiClientError) {
+        setDevicesError(err);
+      } else {
+        setDevicesError(err instanceof Error ? err : new Error("Failed to refresh devices"));
+      }
+    } finally {
+      setIsLoadingDevices(false);
+    }
+  }, [selectedFarmId]);
+
+  const refreshTelemetry = useCallback(async () => {
+    if (!selectedFarmId) return;
+    setIsLoadingTelemetry(true);
+    setTelemetryError(null);
+    try {
+      const res = await getTelemetryEvents(selectedFarmId, { limit: 100 });
+      if (res.data) {
+        setTelemetryEvents(res.data);
+        setLatestTelemetry(extractLatestMeasurements(res.data));
+      }
+    } catch (err: unknown) {
+      if (err instanceof ApiClientError) {
+        setTelemetryError(err);
+      } else {
+        setTelemetryError(err instanceof Error ? err : new Error("Failed to refresh telemetry"));
+      }
+    } finally {
+      setIsLoadingTelemetry(false);
+    }
+  }, [selectedFarmId]);
+
   // Update backend zone directly
   const updateBackendZone = useCallback(async (zoneId: string, data: ZoneUpdate): Promise<{ success: boolean; error?: string }> => {
     try {
@@ -666,6 +773,11 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     setSelectedFarm(null);
     setBackendZones([]);
     setSelectedFarmId(null);
+    setDevices([]);
+    setTelemetryEvents([]);
+    setLatestTelemetry({});
+    setDevicesError(null);
+    setTelemetryError(null);
     setFarmError(null);
     setAuthError(null);
     try {
@@ -689,6 +801,9 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         setSelectedFarm(null);
         setBackendZones([]);
         setSelectedFarmId(null);
+        setDevices([]);
+        setTelemetryEvents([]);
+        setLatestTelemetry({});
       }
     });
 
@@ -1264,14 +1379,23 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         selectedFarmId,
         selectedFarm,
         backendZones,
+        devices,
+        telemetryEvents,
+        latestTelemetry,
         isLoadingFarms,
         isLoadingFarm,
         isLoadingZones,
+        isLoadingDevices,
+        isLoadingTelemetry,
         farmError,
         authError,
+        devicesError,
+        telemetryError,
         selectFarm,
         refreshFarms,
         refreshZones,
+        refreshDevices,
+        refreshTelemetry,
         updateBackendZone,
         logout,
         totalAreaHa,

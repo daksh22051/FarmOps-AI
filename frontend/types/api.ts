@@ -280,6 +280,51 @@ export interface TelemetryEvent {
   metadata?: Record<string, unknown> | null;
 }
 
+export interface TelemetryEventResponse {
+  id: string;
+  device_id: string;
+  farm_id?: string | null;
+  zone_id?: string | null;
+  sequence: number;
+  event_timestamp: string; // ISO-8601
+  received_at?: string | null; // ISO-8601
+  measurements: Record<string, number>;
+  unit_system: string;
+  duplicate: boolean;
+  status: "accepted" | "duplicate" | string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface SensorEventResponse {
+  id: string;
+  device_id: string;
+  farm_id: string;
+  zone_id?: string | null;
+  metric: string;
+  value: number;
+  unit: string;
+  event_at: string; // ISO-8601
+  received_at: string; // ISO-8601
+  sequence: number;
+  quality: string;
+  source: string;
+  correlation_id?: string | null;
+  schema_version: string;
+  is_duplicate: boolean;
+  is_delayed: boolean;
+  // Optional flattened canonical measurements if present
+  soil_moisture?: number | null;
+  temperature?: number | null;
+  humidity?: number | null;
+  rainfall?: number | null;
+  ph?: number | null;
+  nitrogen?: number | null;
+  phosphorus?: number | null;
+  potassium?: number | null;
+  battery_level?: number | null;
+  raw_payload?: Record<string, unknown> | null;
+}
+
 // ==========================================
 // 6. EXTERNAL OBSERVATIONS
 // ==========================================

@@ -10,6 +10,7 @@ import {
   AlertCircle,
   Building2,
   CheckCircle2,
+  Cpu,
   Edit2,
   Info,
   Layers,
@@ -40,12 +41,16 @@ export default function MyFarmPage() {
     selectedFarmId,
     selectedFarm,
     backendZones,
+    devices,
     isLoadingFarms,
     isLoadingFarm,
     isLoadingZones,
+    isLoadingDevices,
     farmError,
+    devicesError,
     selectFarm,
     updateBackendZone,
+    refreshDevices,
   } = useFarm();
 
   // Auth Modal State
@@ -580,6 +585,120 @@ export default function MyFarmPage() {
                 </div>
               </Card>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* Connected Devices & Sensors (Real FastAPI backend integration) */}
+      <div className="mt-10">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-bold text-ink sm:text-lg">
+              Connected Devices & Edge Sensors
+            </h2>
+            <p className="text-xs text-slate-500">
+              Hardware probes, weather stations, and IoT telemetry gateways registered to {selectedFarm?.name || "this farm"}.
+            </p>
+          </div>
+          {selectedFarmId && (
+            <button
+              type="button"
+              onClick={() => refreshDevices()}
+              disabled={isLoadingDevices}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#dfe6dd] bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={isLoadingDevices ? "animate-spin text-forest-700" : "text-slate-500"} />
+              <span>Refresh Devices</span>
+            </button>
+          )}
+        </div>
+
+        {devicesError && (
+          <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-xs text-rose-800">
+            <AlertCircle size={16} className="shrink-0 text-rose-600" />
+            <p>Unable to retrieve device hardware status from backend.</p>
+          </div>
+        )}
+
+        {isLoadingDevices && devices.length === 0 ? (
+          <Card className="p-8 text-center">
+            <Loader2 size={24} className="mx-auto animate-spin text-forest-700" />
+            <p className="mt-2 text-xs text-slate-500">Loading registered devices from backend...</p>
+          </Card>
+        ) : devices.length === 0 ? (
+          <Card className="p-8 text-center border-dashed">
+            <Cpu size={32} className="mx-auto text-slate-300" />
+            <h3 className="mt-3 text-sm font-bold text-ink">No Hardware Devices Registered</h3>
+            <p className="mt-1 text-xs text-slate-500 max-w-md mx-auto">
+              {selectedFarmId
+                ? "No edge sensors or telemetry probes are currently bound to this farm. Register devices via backend or ingest sensor events to auto-register."
+                : "Select a connected backend farm to view its registered sensor nodes and gateways."}
+            </p>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {devices.map((device) => {
+              const assignedZone = backendZones.find((z) => z.id === device.zone_id);
+              const formattedType = device.device_type.replace(/_/g, " ").toUpperCase();
+              const lastSeen = device.last_seen_at
+                ? new Date(device.last_seen_at).toLocaleString()
+                : "No telemetry received";
+
+              return (
+                <Card key={device.id} className="p-5 border-[#dfe6dd] flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <span className="grid h-9 w-9 place-items-center rounded-xl bg-forest-50 text-forest-700">
+                          <Cpu size={18} />
+                        </span>
+                        <div>
+                          <h3 className="text-sm font-bold text-ink font-mono">{device.id}</h3>
+                          <span className="text-[11px] font-semibold text-slate-500">
+                            {formattedType}
+                          </span>
+                        </div>
+                      </div>
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          device.enabled
+                            ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                            : "bg-slate-100 text-slate-600"
+                        }`}
+                      >
+                        {device.enabled ? "Online / Enabled" : "Disabled"}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 space-y-2 text-xs border-t border-[#edf0eb] pt-3">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Assigned Zone:</span>
+                        <span className="font-medium text-ink">
+                          {assignedZone ? assignedZone.name : device.zone_id ? device.zone_id : "Unassigned"}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Last Seen:</span>
+                        <span className="font-medium text-ink text-[11px]">{lastSeen}</span>
+                      </div>
+                      {device.credential_reference && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Hardware Ref:</span>
+                          <span className="font-mono text-slate-600 text-[11px]">
+                            {device.credential_reference}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 border-t border-[#edf0eb] pt-2.5 flex items-center justify-between text-[11px] text-slate-400">
+                    <span>{device.is_demo ? "Demo Node" : "Physical Node"}</span>
+                    <span>Created {new Date(device.created_at).toLocaleDateString()}</span>
+                  </div>
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>

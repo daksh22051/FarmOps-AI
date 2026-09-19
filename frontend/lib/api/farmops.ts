@@ -10,7 +10,9 @@ import type {
   Device,
   DeviceCreate,
   DeviceUpdate,
-  TelemetryEvent,
+  TelemetryEventCreate,
+  TelemetryEventResponse,
+  SensorEventResponse,
   ExternalObservation,
   RiskAssessment,
   ActionPlan,
@@ -101,25 +103,33 @@ export async function updateDevice(deviceId: string, data: DeviceUpdate, options
 }
 
 // ==========================================
-// 5. TELEMETRY
+// 5. TELEMETRY & SENSOR READINGS
 // ==========================================
 
 export async function getTelemetryEvents(
   farmId: string,
   params?: {
     zone_id?: string;
-    event_type?: string;
+    device_id?: string;
+    metric?: string;
     start_time?: string;
     end_time?: string;
     limit?: number;
     offset?: number;
   },
   options?: RequestOptions
-): Promise<APIResponse<TelemetryEvent[]>> {
-  return apiClient.get<TelemetryEvent[]>(`/telemetry/${farmId}/events`, {
+): Promise<APIResponse<SensorEventResponse[]>> {
+  return apiClient.get<SensorEventResponse[]>(`/telemetry/${farmId}/events`, {
     ...options,
     params: params as Record<string, string | number | boolean | undefined | null>,
   });
+}
+
+export async function createTelemetryEvent(
+  data: TelemetryEventCreate,
+  options?: RequestOptions
+): Promise<APIResponse<TelemetryEventResponse>> {
+  return apiClient.post<TelemetryEventResponse>("/telemetry/events", data, options);
 }
 
 // ==========================================

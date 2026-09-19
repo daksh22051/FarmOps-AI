@@ -1,32 +1,18 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  Activity,
   BellRing,
   CheckCircle2,
   ClipboardCheck,
-  CloudSun,
   Database,
-  Droplets,
-  FileCheck2,
   History,
   ShieldAlert,
-  Thermometer,
-  Waves,
 } from "lucide-react";
 import { AppShell } from "../../components/app-shell";
-import { Card, StatusBadge } from "../../components/ui";
+import { Card } from "../../components/ui";
 import { getDashboardDatasetBundle } from "../../lib/data/server";
 import { DatasetExplorer } from "./dataset-explorer";
 import { FarmOverviewCard } from "./farm-overview-card";
-
-const overviewItems: Array<{ label: string; icon: LucideIcon; tone: string }> = [
-  { label: "Soil moisture", icon: Droplets, tone: "bg-sky-50 text-sky-700" },
-  { label: "Temperature", icon: Thermometer, tone: "bg-amber-50 text-amber-700" },
-  { label: "Humidity", icon: Waves, tone: "bg-cyan-50 text-cyan-700" },
-  { label: "Active risks", icon: ShieldAlert, tone: "bg-rose-50 text-rose-700" },
-  { label: "Pending approvals", icon: FileCheck2, tone: "bg-violet-50 text-violet-700" },
-  { label: "Open tasks", icon: ClipboardCheck, tone: "bg-emerald-50 text-emerald-700" },
-];
+import { TelemetryOverview } from "./telemetry-overview";
 
 export default async function DashboardPage() {
   const bundle = await getDashboardDatasetBundle();
@@ -56,19 +42,8 @@ export default async function DashboardPage() {
       {/* Operational Farm Overview (Connected to FastAPI backend) */}
       <FarmOverviewCard />
 
-      {/* Operational Indicators (Honest unavailable state for live farm) */}
-      <section className="mt-8" aria-labelledby="overview-heading">
-        <SectionHeading
-          id="overview-heading"
-          title="Operational telemetry"
-          description="Live farm indicators (awaiting physical hardware connection)"
-        />
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {overviewItems.map(({ label, icon: Icon, tone }) => (
-            <KpiCard key={label} label={label} icon={Icon} tone={tone} />
-          ))}
-        </div>
-      </section>
+      {/* Operational Sensor Telemetry & Live Conditions History (Connected to real backend telemetry) */}
+      <TelemetryOverview />
 
       {/* Interactive Dataset Demonstration Hub */}
       <section className="mt-10" aria-labelledby="datasets-heading">
@@ -80,26 +55,6 @@ export default async function DashboardPage() {
           />
           <DatasetExplorer initialBundle={bundle} />
         </div>
-      </section>
-
-      {/* Advisory and Follow-up Sections */}
-      <section className="mt-10" aria-labelledby="conditions-heading">
-        <SectionHeading id="conditions-heading" title="Farm conditions" description="Live sensor and environmental trends" />
-        <Card className="mt-4 p-0">
-          <div className="flex items-center justify-between border-b border-[#edf0eb] px-5 py-4 sm:px-6">
-            <div className="flex items-center gap-2 text-sm font-semibold text-ink">
-              <Activity aria-hidden="true" size={17} className="text-forest-600" />
-              Live condition history
-            </div>
-            <StatusBadge>No live source</StatusBadge>
-          </div>
-          <EmptyState
-            icon={CloudSun}
-            title="Live sensor history is unavailable"
-            description="Verified moisture, temperature, and humidity trends will appear here after physical on-farm hardware integration. No synthetic farm measurements are being substituted."
-            roomy
-          />
-        </Card>
       </section>
 
       <div className="mt-8 grid gap-5 xl:grid-cols-2">
@@ -150,20 +105,6 @@ function SectionHeading({ id, title, description }: { id: string; title: string;
   );
 }
 
-function KpiCard({ label, icon: Icon, tone }: { label: string; icon: LucideIcon; tone: string }) {
-  return (
-    <Card className="flex min-h-32 items-start justify-between">
-      <div>
-        <p className="text-sm font-medium text-slate-600">{label}</p>
-        <p className="mt-4 text-lg font-semibold text-ink">Unavailable</p>
-        <p className="mt-1 text-xs text-slate-500">Awaiting live farm connection</p>
-      </div>
-      <span className={`grid h-10 w-10 place-items-center rounded-xl ${tone}`}>
-        <Icon aria-hidden="true" size={20} />
-      </span>
-    </Card>
-  );
-}
 
 function OverviewSection({
   icon: Icon,

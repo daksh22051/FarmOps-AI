@@ -11,6 +11,8 @@ frontend/build/
 # Local environment files
 .env*
 !.env.example
+frontend/.env*
+!frontend/.env.example
 
 # TypeScript, caches, and local tooling state
 *.tsbuildinfo

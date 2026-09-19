@@ -24,6 +24,14 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+To run quality checks:
+`ash
+cd frontend
+npm run lint
+npm run type-check
+npm run build
+`
+
 ### Backend (FastAPI)
 
 `ash

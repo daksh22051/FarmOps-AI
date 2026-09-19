@@ -7,6 +7,7 @@ import { Bell, ChevronRight, Menu, X } from "lucide-react";
 import { useState } from "react";
 import { navItems } from "./navigation";
 import { useFarm } from "../context/farm-context";
+import { AuthModal } from "./auth-modal";
 
 function Logo({ className = "h-10 w-10" }: { className?: string }) {
   return (
@@ -68,7 +69,8 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const { farm, unreadAlertCount } = useFarm();
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const { farm, currentUser, unreadAlertCount } = useFarm();
 
   return (
     <div className="min-h-screen bg-canvas lg:grid lg:grid-cols-[250px_1fr]">
@@ -90,9 +92,11 @@ export function AppShell({
 
         <div className="mt-8 rounded-xl border border-[#dfe6dd] bg-[#f5f7f3] p-4 text-xs leading-5 text-slate-600">
           <strong className="block text-ink font-semibold mb-1">
-            Advisory Console (Local)
+            {currentUser ? "Live Backend Mode" : "Advisory Console"}
           </strong>
-          State is persisted in browser storage. Research datasets remain separated from farm records.
+          {currentUser
+            ? `Connected as ${currentUser.email || "Operator"}. Authoritative farm & zone data is synced with FastAPI backend.`
+            : "State is maintained in workspace. Connect Supabase credentials to access live operational backend."}
         </div>
       </aside>
 
@@ -127,14 +131,24 @@ export function AppShell({
               )}
             </Link>
 
-            <div className="flex items-center gap-2 rounded-full border border-[#dfe6dd] bg-white py-1 pl-1.5 pr-3 text-xs font-medium text-slate-700 shadow-2xs">
+            <button
+              type="button"
+              onClick={() => setAuthModalOpen(true)}
+              aria-label={currentUser ? "Account and farm details" : "Connect live backend"}
+              className="flex items-center gap-2 rounded-full border border-[#dfe6dd] bg-white py-1 pl-1.5 pr-3 text-xs font-medium text-slate-700 shadow-2xs hover:border-forest-400 hover:bg-slate-50 transition-colors cursor-pointer"
+            >
               <span className="grid h-6 w-6 place-items-center rounded-full bg-[#dcebdd] text-xs font-bold text-forest-800">
-                {farm.isDemoData ? "D" : "F"}
+                {currentUser ? (currentUser.email?.[0] || "U").toUpperCase() : farm.isDemoData ? "D" : "F"}
               </span>
-              <span className="hidden sm:inline">
-                {farm.isDemoData ? "Demo Account" : farm.name}
+              <span className="hidden sm:inline font-semibold">
+                {currentUser ? farm.name : farm.isDemoData ? "Demo Account" : farm.name}
               </span>
-            </div>
+              {!currentUser && (
+                <span className="ml-1 rounded-full bg-forest-100 px-2 py-0.5 text-[10px] font-bold text-forest-800">
+                  Connect
+                </span>
+              )}
+            </button>
           </div>
         </header>
 
@@ -142,6 +156,8 @@ export function AppShell({
           {children}
         </main>
       </div>
+
+      <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
 
       {/* Mobile Drawer */}
       {open && (

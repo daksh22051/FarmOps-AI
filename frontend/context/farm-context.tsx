@@ -1,6 +1,11 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, useMemo } from "react";
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react";
+import { getCurrentUser as apiGetCurrentUser, getFarms, getFarm, getZones, updateZone as apiUpdateZone } from "../lib/api/farmops";
+import { getCurrentSession, signOut as authSignOut } from "../lib/auth/session";
+import { createClient } from "../lib/supabase/client";
+import { ApiClientError } from "../lib/api/client";
+import type { Farm, Zone, ZoneUpdate, UserProfile } from "../types/api";
 
 // ==========================================
 // DOMAIN TYPES
@@ -381,7 +386,7 @@ export const INITIAL_TIMELINE: TimelineEvent[] = [
 // CONTEXT INTERFACE
 // ==========================================
 
-interface FarmContextType {
+export interface FarmContextType {
   isHydrated: boolean;
   farm: FarmProfile;
   settings: FarmSettings;
@@ -389,6 +394,25 @@ interface FarmContextType {
   tasks: FarmTask[];
   alerts: SystemAlert[];
   timeline: TimelineEvent[];
+  
+  // Real Backend Data & Auth
+  currentUser: UserProfile | null;
+  backendFarms: Farm[];
+  selectedFarmId: string | null;
+  selectedFarm: Farm | null;
+  backendZones: Zone[];
+  isLoadingFarms: boolean;
+  isLoadingFarm: boolean;
+  isLoadingZones: boolean;
+  farmError: ApiClientError | Error | null;
+  authError: ApiClientError | Error | null;
+  
+  // Backend Actions
+  selectFarm: (farmId: string) => Promise<void>;
+  refreshFarms: () => Promise<void>;
+  refreshZones: () => Promise<void>;
+  updateBackendZone: (zoneId: string, data: ZoneUpdate) => Promise<{ success: boolean; error?: string }>;
+  logout: () => Promise<void>;
   
   // Computed helpers
   totalAreaHa: number;
@@ -439,6 +463,7 @@ interface FarmContextType {
 const FarmContext = createContext<FarmContextType | null>(null);
 
 const STORAGE_KEY = "farmops_state_v2";
+const SELECTED_FARM_STORAGE_KEY = "farmops_selected_farm_id";
 
 export function FarmProvider({ children }: { children: React.ReactNode }) {
   const [isHydrated, setIsHydrated] = useState(false);
@@ -448,6 +473,18 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
   const [tasks, setTasks] = useState<FarmTask[]>(INITIAL_TASKS);
   const [alerts, setAlerts] = useState<SystemAlert[]>(INITIAL_ALERTS);
   const [timeline, setTimeline] = useState<TimelineEvent[]>(INITIAL_TIMELINE);
+
+  // Backend state
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [backendFarms, setBackendFarms] = useState<Farm[]>([]);
+  const [selectedFarmId, setSelectedFarmId] = useState<string | null>(null);
+  const [selectedFarm, setSelectedFarm] = useState<Farm | null>(null);
+  const [backendZones, setBackendZones] = useState<Zone[]>([]);
+  const [isLoadingFarms, setIsLoadingFarms] = useState(false);
+  const [isLoadingFarm, setIsLoadingFarm] = useState(false);
+  const [isLoadingZones, setIsLoadingZones] = useState(false);
+  const [farmError, setFarmError] = useState<ApiClientError | Error | null>(null);
+  const [authError, setAuthError] = useState<ApiClientError | Error | null>(null);
 
   // Load from localStorage on client mount
   useEffect(() => {
@@ -469,7 +506,7 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Sync to localStorage on change
+  // Sync client-only state to localStorage on change
   useEffect(() => {
     if (!isHydrated) return;
     try {
@@ -489,14 +526,225 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     }
   }, [isHydrated, farm, settings, advisories, tasks, alerts, timeline]);
 
+  // Select a specific farm and load its details & zones
+  const selectFarm = useCallback(async (farmId: string) => {
+    setSelectedFarmId(farmId);
+    try {
+      localStorage.setItem(SELECTED_FARM_STORAGE_KEY, farmId);
+    } catch {}
+
+    setIsLoadingFarm(true);
+    setIsLoadingZones(true);
+    setFarmError(null);
+
+    try {
+      const [farmRes, zonesRes] = await Promise.all([
+        getFarm(farmId),
+        getZones(farmId),
+      ]);
+
+      if (farmRes.data) {
+        setSelectedFarm(farmRes.data);
+      }
+      if (zonesRes.data) {
+        setBackendZones(zonesRes.data);
+      }
+    } catch (err: unknown) {
+      console.error("Failed to select farm:", err);
+      if (err instanceof ApiClientError) {
+        setFarmError(err);
+      } else {
+        setFarmError(err instanceof Error ? err : new Error("Failed to load farm details"));
+      }
+    } finally {
+      setIsLoadingFarm(false);
+      setIsLoadingZones(false);
+    }
+  }, []);
+
+  // Load all farms for authenticated user
+  const loadFarms = useCallback(async (preferredFarmId?: string | null) => {
+    setIsLoadingFarms(true);
+    setFarmError(null);
+    setAuthError(null);
+
+    try {
+      const session = await getCurrentSession();
+      if (!session?.access_token) {
+        // No session -> remain in unauthenticated mode
+        setCurrentUser(null);
+        setBackendFarms([]);
+        setSelectedFarm(null);
+        setBackendZones([]);
+        setIsLoadingFarms(false);
+        return;
+      }
+
+      // Session exists: call GET /auth/me and GET /farms
+      const [userRes, farmsRes] = await Promise.all([
+        apiGetCurrentUser().catch((err: unknown) => {
+          console.warn("GET /auth/me error:", err);
+          return null;
+        }),
+        getFarms(),
+      ]);
+
+      if (userRes && userRes.data) {
+        setCurrentUser(userRes.data);
+      }
+
+      const farms = farmsRes.data || [];
+      setBackendFarms(farms);
+
+      if (farms.length > 0) {
+        const storedId = preferredFarmId || (typeof window !== "undefined" ? localStorage.getItem(SELECTED_FARM_STORAGE_KEY) : null);
+        const matched = farms.find((f) => f.id === storedId);
+        const activeId = matched ? matched.id : farms[0].id;
+        await selectFarm(activeId);
+      } else {
+        setSelectedFarmId(null);
+        setSelectedFarm(null);
+        setBackendZones([]);
+      }
+    } catch (err: unknown) {
+      console.error("Error loading backend farms:", err);
+      if (err instanceof ApiClientError) {
+        setFarmError(err);
+        if (err.status === 401) {
+          setAuthError(err);
+        }
+      } else {
+        setFarmError(err instanceof Error ? err : new Error("Failed to load farms from backend"));
+      }
+    } finally {
+      setIsLoadingFarms(false);
+    }
+  }, [selectFarm]);
+
+  // Refresh helper
+  const refreshFarms = useCallback(async () => {
+    await loadFarms(selectedFarmId);
+  }, [loadFarms, selectedFarmId]);
+
+  const refreshZones = useCallback(async () => {
+    if (!selectedFarmId) return;
+    setIsLoadingZones(true);
+    try {
+      const res = await getZones(selectedFarmId);
+      if (res.data) {
+        setBackendZones(res.data);
+      }
+    } catch (err: unknown) {
+      if (err instanceof ApiClientError) {
+        setFarmError(err);
+      }
+    } finally {
+      setIsLoadingZones(false);
+    }
+  }, [selectedFarmId]);
+
+  // Update backend zone directly
+  const updateBackendZone = useCallback(async (zoneId: string, data: ZoneUpdate): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await apiUpdateZone(zoneId, data);
+      if (res.data) {
+        setBackendZones((prev) => prev.map((z) => (z.id === zoneId ? res.data! : z)));
+        return { success: true };
+      }
+      return { success: false, error: res.message || "Failed to update zone" };
+    } catch (err: unknown) {
+      const msg = err instanceof ApiClientError ? err.message : (err instanceof Error ? err.message : "Failed to update zone");
+      return { success: false, error: msg };
+    }
+  }, []);
+
+  // Logout
+  const logout = useCallback(async () => {
+    await authSignOut();
+    setCurrentUser(null);
+    setBackendFarms([]);
+    setSelectedFarm(null);
+    setBackendZones([]);
+    setSelectedFarmId(null);
+    setFarmError(null);
+    setAuthError(null);
+    try {
+      localStorage.removeItem(SELECTED_FARM_STORAGE_KEY);
+    } catch {}
+  }, []);
+
+  // Initialize backend check on mount and listen to Supabase auth events
+  useEffect(() => {
+    loadFarms();
+
+    const supabase = createClient();
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        if (session?.access_token) {
+          await loadFarms();
+        }
+      } else if (event === "SIGNED_OUT") {
+        setCurrentUser(null);
+        setBackendFarms([]);
+        setSelectedFarm(null);
+        setBackendZones([]);
+        setSelectedFarmId(null);
+      }
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, [loadFarms]);
+
+  // Effective unified farm data for downstream views
+  const effectiveFarm: FarmProfile = useMemo(() => {
+    if (selectedFarm) {
+      return {
+        name: selectedFarm.name,
+        district: selectedFarm.location || selectedFarm.address || "Location unassigned",
+        primarySoil: (selectedFarm.crop_profile?.primary_soil as string) || (selectedFarm.crop_profile?.soil_type as string) || "Agricultural Loam",
+        isDemoData: selectedFarm.is_demo,
+        zones: backendZones.map((bz) => ({
+          id: bz.id,
+          name: bz.name,
+          areaHa: bz.area || 0,
+          crop: bz.crop || "Unspecified Crop",
+          soilType: "Agricultural Loam",
+          irrigation: "Drip",
+          status: bz.status === "active" ? "Active Cultivation" : bz.status === "fallow" ? "Fallow / Resting" : "Soil Preparation",
+        })),
+      };
+    }
+    if (currentUser && backendFarms.length === 0) {
+      return {
+        name: "No Farm Registered",
+        district: "Not configured",
+        primarySoil: "Not configured",
+        isDemoData: false,
+        zones: [],
+      };
+    }
+    return farm;
+  }, [selectedFarm, backendZones, currentUser, backendFarms.length, farm]);
+
   // Derived Values
   const totalAreaHa = useMemo(() => {
-    return farm.zones.reduce((sum, z) => sum + (Number(z.areaHa) || 0), 0);
-  }, [farm.zones]);
+    if (selectedFarm) {
+      if (selectedFarm.total_area !== undefined && selectedFarm.total_area !== null) {
+        return Number(selectedFarm.total_area);
+      }
+      return backendZones.reduce((sum, z) => sum + (Number(z.area) || 0), 0);
+    }
+    return effectiveFarm.zones.reduce((sum, z) => sum + (Number(z.areaHa) || 0), 0);
+  }, [selectedFarm, backendZones, effectiveFarm.zones]);
 
   const activeZoneCount = useMemo(() => {
-    return farm.zones.filter((z) => z.status === "Active Cultivation").length;
-  }, [farm.zones]);
+    if (selectedFarm) {
+      return backendZones.filter((z) => z.status === "active").length;
+    }
+    return effectiveFarm.zones.filter((z) => z.status === "Active Cultivation").length;
+  }, [selectedFarm, backendZones, effectiveFarm.zones]);
 
   const unreadAlertCount = useMemo(() => {
     return alerts.filter((a) => {
@@ -579,6 +827,26 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: "Area must be a positive number." };
       }
     }
+
+    // If active backend farm has this zone, sync to backend via PATCH /zones/:id
+    if (selectedFarm && backendZones.some((bz) => bz.id === id)) {
+      const patchPayload: ZoneUpdate = {};
+      if (zoneData.name !== undefined) patchPayload.name = zoneData.name.trim();
+      if (zoneData.areaHa !== undefined) patchPayload.area = Number(zoneData.areaHa);
+      if (zoneData.crop !== undefined) patchPayload.crop = zoneData.crop.trim();
+      if (zoneData.status !== undefined) {
+        patchPayload.status =
+          zoneData.status === "Active Cultivation"
+            ? "active"
+            : zoneData.status === "Fallow / Resting"
+            ? "fallow"
+            : "quarantine";
+      }
+      updateBackendZone(id, patchPayload).catch((e) => {
+        console.warn("Backend zone update error:", e);
+      });
+    }
+
     let updatedName = "";
     setFarm((prev) => {
       const updated = prev.zones.map((z) => {
@@ -985,12 +1253,27 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     <FarmContext.Provider
       value={{
         isHydrated,
-        farm,
+        farm: effectiveFarm,
         settings,
         advisories,
         tasks,
         alerts,
         timeline,
+        currentUser,
+        backendFarms,
+        selectedFarmId,
+        selectedFarm,
+        backendZones,
+        isLoadingFarms,
+        isLoadingFarm,
+        isLoadingZones,
+        farmError,
+        authError,
+        selectFarm,
+        refreshFarms,
+        refreshZones,
+        updateBackendZone,
+        logout,
         totalAreaHa,
         activeZoneCount,
         unreadAlertCount,

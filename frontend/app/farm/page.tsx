@@ -4,11 +4,16 @@ import React, { useState } from "react";
 import { AppShell } from "../../components/app-shell";
 import { Card } from "../../components/ui";
 import { useFarm, type FarmZone } from "../../context/farm-context";
+import { AuthModal } from "../../components/auth-modal";
+import { ApiClientError } from "../../lib/api/client";
 import {
   AlertCircle,
+  Building2,
+  CheckCircle2,
   Edit2,
   Info,
   Layers,
+  Loader2,
   MapPin,
   Plus,
   RefreshCw,
@@ -30,7 +35,22 @@ export default function MyFarmPage() {
     clearFarm,
     formatArea,
     settings,
+    currentUser,
+    backendFarms,
+    selectedFarmId,
+    selectedFarm,
+    backendZones,
+    isLoadingFarms,
+    isLoadingFarm,
+    isLoadingZones,
+    farmError,
+    selectFarm,
+    updateBackendZone,
   } = useFarm();
+
+  // Auth Modal State
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [successNotification, setSuccessNotification] = useState<string | null>(null);
 
   // Profile Edit Modal State
   const [editingProfile, setEditingProfile] = useState(false);
@@ -49,6 +69,7 @@ export default function MyFarmPage() {
   const [zoneIrrigation, setZoneIrrigation] = useState<FarmZone["irrigation"]>("Drip");
   const [zoneStatus, setZoneStatus] = useState<FarmZone["status"]>("Active Cultivation");
   const [zoneFormError, setZoneFormError] = useState("");
+  const [isSavingZone, setIsSavingZone] = useState(false);
 
   // Delete Confirmation State
   const [deletingZone, setDeletingZone] = useState<FarmZone | null>(null);
@@ -107,8 +128,8 @@ export default function MyFarmPage() {
     setZoneFormError("");
   };
 
-  // Save Zone Form (unit aware)
-  const handleSaveZone = (e: React.FormEvent) => {
+  // Save Zone Form (unit aware with real backend PATCH)
+  const handleSaveZone = async (e: React.FormEvent) => {
     e.preventDefault();
     setZoneFormError("");
 
@@ -141,7 +162,34 @@ export default function MyFarmPage() {
         setZoneFormError(res.error || "Failed to create zone.");
         return;
       }
+      setSuccessNotification(`Field zone "${zoneName.trim()}" added successfully.`);
+      setTimeout(() => setSuccessNotification(null), 4000);
     } else if (zoneModalMode === "edit" && targetZoneId) {
+      // If this zone is backed by the real FastAPI backend, call PATCH /zones/{zone_id}
+      if (selectedFarm && backendZones.some((bz) => bz.id === targetZoneId)) {
+        setIsSavingZone(true);
+        const res = await updateBackendZone(targetZoneId, {
+          name: zoneName.trim(),
+          area: areaHa,
+          crop: zoneCrop.trim(),
+          status:
+            zoneStatus === "Active Cultivation"
+              ? "active"
+              : zoneStatus === "Fallow / Resting"
+              ? "fallow"
+              : "quarantine",
+        });
+        setIsSavingZone(false);
+        if (!res.success) {
+          setZoneFormError(res.error || "Failed to update zone on backend.");
+          return;
+        }
+        setSuccessNotification(`Zone "${zoneName.trim()}" updated successfully via backend API.`);
+        setTimeout(() => setSuccessNotification(null), 4000);
+        setZoneModalMode(null);
+        return;
+      }
+
       const res = updateZone(targetZoneId, {
         name: zoneName,
         areaHa,
@@ -154,6 +202,8 @@ export default function MyFarmPage() {
         setZoneFormError(res.error || "Failed to update zone.");
         return;
       }
+      setSuccessNotification(`Zone "${zoneName.trim()}" updated.`);
+      setTimeout(() => setSuccessNotification(null), 3000);
     }
 
     setZoneModalMode(null);
@@ -164,6 +214,8 @@ export default function MyFarmPage() {
     if (deletingZone) {
       deleteZone(deletingZone.id);
       setDeletingZone(null);
+      setSuccessNotification(`Zone "${deletingZone.name}" deleted.`);
+      setTimeout(() => setSuccessNotification(null), 3000);
     }
   };
 
@@ -176,7 +228,11 @@ export default function MyFarmPage() {
             <span className="text-xs font-semibold uppercase tracking-wider text-forest-700">
               Farm Hierarchy & Land Registry
             </span>
-            {farm.isDemoData ? (
+            {currentUser && selectedFarm ? (
+              <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
+                {selectedFarm.is_demo ? "Demo Farm (Backend)" : "Live Backend Farm"}
+              </span>
+            ) : farm.isDemoData ? (
               <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800">
                 Seeded Demo Profile
               </span>
@@ -186,7 +242,30 @@ export default function MyFarmPage() {
               </span>
             )}
           </div>
-          <h1 className="text-2xl font-bold text-ink sm:text-3xl">{farm.name}</h1>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-bold text-ink sm:text-3xl">{farm.name}</h1>
+
+            {/* Farm Selector if user has multiple backend farms */}
+            {backendFarms.length > 1 && (
+              <div className="flex items-center gap-1.5 ml-2">
+                <Building2 size={15} className="text-forest-600" />
+                <select
+                  id="farm-select-dropdown"
+                  value={selectedFarmId || ""}
+                  onChange={(e) => selectFarm(e.target.value)}
+                  className="rounded-xl border border-[#dfe6dd] bg-white px-2.5 py-1 text-xs font-semibold text-ink shadow-2xs focus:border-forest-600 focus:outline-none"
+                >
+                  {backendFarms.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} {f.location ? `(${f.location})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
           <div className="mt-1 flex flex-wrap items-center gap-4 text-xs text-slate-600">
             <span className="flex items-center gap-1.5">
               <MapPin size={14} className="text-forest-600" />
@@ -196,10 +275,24 @@ export default function MyFarmPage() {
               <Layers size={14} className="text-forest-600" />
               Soil: {farm.primarySoil}
             </span>
+            {selectedFarm?.timezone && (
+              <span className="text-slate-400">
+                Timezone: {selectedFarm.timezone}
+              </span>
+            )}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {!currentUser && (
+            <button
+              type="button"
+              onClick={() => setAuthModalOpen(true)}
+              className="inline-flex items-center gap-2 rounded-xl border border-forest-300 bg-forest-50 px-3.5 py-2 text-xs font-semibold text-forest-800 shadow-2xs hover:bg-forest-100"
+            >
+              Sign In (Connect Live Backend)
+            </button>
+          )}
           <button
             type="button"
             onClick={openEditProfile}
@@ -219,14 +312,78 @@ export default function MyFarmPage() {
         </div>
       </div>
 
+      {/* Success Notification Banner */}
+      {successNotification && (
+        <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3.5 text-xs font-semibold text-emerald-900 shadow-2xs">
+          <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+          <span>{successNotification}</span>
+        </div>
+      )}
+
+      {/* Loading Banner */}
+      {(isLoadingFarms || isLoadingFarm || isLoadingZones) && (
+        <div className="mt-4 flex items-center gap-2 rounded-xl border border-forest-200 bg-forest-50/70 p-3 text-xs font-medium text-forest-800">
+          <Loader2 size={16} className="animate-spin text-forest-700 shrink-0" />
+          <span>Syncing authoritative farm and zone data with FastAPI backend...</span>
+        </div>
+      )}
+
+      {/* Error Handling Banner */}
+      {farmError && (
+        <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-900">
+          <div className="flex items-start gap-3">
+            <AlertCircle size={18} className="mt-0.5 shrink-0 text-rose-600" />
+            <div className="flex-1">
+              <p className="font-bold">
+                {farmError instanceof ApiClientError && farmError.status === 401
+                  ? "Authentication Required"
+                  : farmError instanceof ApiClientError && farmError.status === 403
+                  ? "Access Forbidden"
+                  : farmError instanceof ApiClientError && farmError.status === 404
+                  ? "Farm Not Found"
+                  : farmError instanceof ApiClientError && farmError.status === 422
+                  ? "Validation Error"
+                  : "Backend Service Notice"}
+              </p>
+              <p className="mt-1 leading-relaxed">
+                {farmError instanceof ApiClientError && farmError.status === 401
+                  ? "Your session has expired or you are unauthenticated. Sign in with Supabase to access live backend farms."
+                  : farmError instanceof ApiClientError && farmError.status === 403
+                  ? "You do not have sufficient permissions to access this farm resource."
+                  : farmError instanceof ApiClientError && farmError.status === 404
+                  ? "The requested farm could not be found."
+                  : farmError instanceof ApiClientError && farmError.status === 422
+                  ? "The request payload failed backend validation constraints."
+                  : farmError.message}
+              </p>
+              {farmError instanceof ApiClientError && farmError.status === 401 && (
+                <button
+                  type="button"
+                  onClick={() => setAuthModalOpen(true)}
+                  className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-rose-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-800"
+                >
+                  Sign In to Backend
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Persistence and Data Scope Banner */}
       <div className="mt-6 rounded-xl border border-blue-200 bg-blue-50/70 p-4 text-xs text-blue-950">
         <div className="flex items-start gap-3">
           <Info size={18} className="mt-0.5 shrink-0 text-blue-600" />
           <div className="space-y-1">
-            <p className="font-semibold">Local Persistence & Data Separation Notice</p>
+            <p className="font-semibold">
+              {currentUser && selectedFarm
+                ? "Live Backend Synchronization Active"
+                : "Local Persistence & Demonstration Notice"}
+            </p>
             <p className="leading-relaxed text-blue-900">
-              Farm profile edits and parcel records are saved locally in your browser workspace. They are never transmitted to an external server or used to modify scientific research datasets (e.g. Kaggle Crop Recommendation or Edge Sensor telemetry). Live machinery actuators and irrigation valves are intentionally not connected.
+              {currentUser && selectedFarm
+                ? `Operational farm "${selectedFarm.name}" (ID: ${selectedFarm.id}) is connected to the FastAPI backend. Zone modifications are recorded to the backend database with audit tracking.`
+                : "You are exploring in local demonstration mode. Edits are stored locally. Connect Supabase credentials above to load your live farms from the FastAPI backend."}
             </p>
           </div>
         </div>
@@ -648,15 +805,24 @@ export default function MyFarmPage() {
                 <button
                   type="button"
                   onClick={() => setZoneModalMode(null)}
-                  className="rounded-xl border border-[#dfe6dd] px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  disabled={isSavingZone}
+                  className="rounded-xl border border-[#dfe6dd] px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="rounded-xl bg-forest-700 px-4 py-2 text-xs font-semibold text-white hover:bg-forest-800"
+                  disabled={isSavingZone}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-forest-700 px-4 py-2 text-xs font-semibold text-white hover:bg-forest-800 disabled:opacity-50"
                 >
-                  {zoneModalMode === "add" ? "Create Zone" : "Save Changes"}
+                  {isSavingZone ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" />
+                      Saving to backend...
+                    </>
+                  ) : (
+                    zoneModalMode === "add" ? "Create Zone" : "Save Changes"
+                  )}
                 </button>
               </div>
             </form>
@@ -742,6 +908,8 @@ export default function MyFarmPage() {
           </div>
         </div>
       )}
+
+      <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
     </AppShell>
   );
 }

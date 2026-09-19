@@ -9,10 +9,7 @@ import {
   Droplets,
   FileCheck2,
   History,
-  Leaf,
-  MapPin,
   ShieldAlert,
-  Sprout,
   Thermometer,
   Waves,
 } from "lucide-react";
@@ -20,6 +17,7 @@ import { AppShell } from "../../components/app-shell";
 import { Card, StatusBadge } from "../../components/ui";
 import { getDashboardDatasetBundle } from "../../lib/data/server";
 import { DatasetExplorer } from "./dataset-explorer";
+import { FarmOverviewCard } from "./farm-overview-card";
 
 const overviewItems: Array<{ label: string; icon: LucideIcon; tone: string }> = [
   { label: "Soil moisture", icon: Droplets, tone: "bg-sky-50 text-sky-700" },
@@ -55,42 +53,8 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* Operational Farm Configuration Status (Honest unconfigured state) */}
-      <Card className="mt-8 overflow-hidden p-0">
-        <div className="grid lg:grid-cols-[1.25fr_1fr]">
-          <div className="border-b border-[#e5eae3] bg-[#f4f7f1] p-5 sm:p-6 lg:border-b-0 lg:border-r">
-            <div className="flex items-start gap-4">
-              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white text-forest-700 shadow-sm">
-                <Sprout aria-hidden="true" size={22} />
-              </span>
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.13em] text-slate-500">Physical Farm Integration</p>
-                <h2 className="mt-1 text-xl font-semibold text-ink">Farm Telemetry Not Connected</h2>
-                <p className="mt-1 text-sm leading-6 text-slate-600">
-                  Live on-field sensors, pump telemetry, and farmer account credentials are not configured.
-                  Historical research datasets are available in the demonstration hub below.
-                </p>
-              </div>
-            </div>
-          </div>
-          <dl className="grid grid-cols-2 divide-x divide-[#e5eae3] p-5 sm:p-6">
-            <div className="pr-4">
-              <dt className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <Leaf aria-hidden="true" size={14} />
-                Live Crop
-              </dt>
-              <dd className="mt-2 text-sm font-semibold text-slate-700">Not configured</dd>
-            </div>
-            <div className="pl-4">
-              <dt className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <MapPin aria-hidden="true" size={14} />
-                Physical Location
-              </dt>
-              <dd className="mt-2 text-sm font-semibold text-slate-700">Not configured</dd>
-            </div>
-          </dl>
-        </div>
-      </Card>
+      {/* Operational Farm Overview (Connected to FastAPI backend) */}
+      <FarmOverviewCard />
 
       {/* Operational Indicators (Honest unavailable state for live farm) */}
       <section className="mt-8" aria-labelledby="overview-heading">

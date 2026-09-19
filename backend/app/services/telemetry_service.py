@@ -188,6 +188,18 @@ class TelemetryService:
             f"Successfully ingested telemetry event id={new_event.id} for device_id={new_event.device_id}, sequence={new_event.sequence}"
         )
 
+        # 10. Isolated Risk Evaluation Trigger (Safe execution that cannot fail ingestion)
+        try:
+            from app.services.risk_detection_service import RiskDetectionService
+            await RiskDetectionService.evaluate_zone(
+                session=session,
+                farm_id=authoritative_farm_id,
+                zone_id=authoritative_zone_id,
+                actor_id=user.id if user else "telemetry_ingest",
+            )
+        except Exception as eval_err:
+            logger.warning(f"Non-blocking risk evaluation error during telemetry ingestion: {eval_err}")
+
         return TelemetryEventResponse(
             id=new_event.id,
             device_id=new_event.device_id,

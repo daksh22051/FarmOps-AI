@@ -16,6 +16,7 @@ from app.services.farm_service import FarmService
 from app.services.zone_service import ZoneService
 from app.services.device_service import DeviceService
 from app.services.audit_service import AuditService
+from app.services.risk_service import RiskService
 from app.schemas.farm import (
     FarmCreate,
     FarmUpdate,
@@ -26,6 +27,7 @@ from app.schemas.farm import (
     ZoneResponse,
 )
 from app.schemas.device import DeviceCreate, DeviceResponse
+from app.schemas.risk import RiskAssessmentResponse
 from app.schemas.common import APIResponse
 
 router = APIRouter(prefix="/farms", tags=["Farms, Zones & Devices"])
@@ -266,3 +268,39 @@ async def list_memberships(
     await check_farm_access(db, farm_id=farm_id, user=user)
     memberships = await FarmService.get_memberships(db, farm_id=farm_id)
     return APIResponse(success=True, data=[FarmMembershipResponse.model_validate(m) for m in memberships])
+
+
+# --- RISKS UNDER FARM ---
+@router.get("/{farm_id}/risks", response_model=APIResponse[List[RiskAssessmentResponse]])
+async def list_farm_risks(
+    farm_id: str,
+    zone_id: Optional[str] = Query(None, description="Filter by zone ID"),
+    risk_type: Optional[str] = Query(None, description="Filter by risk type (water_stress, pest_disease, nutrient_deficiency)"),
+    severity: Optional[str] = Query(None, description="Filter by severity (low, medium, high, critical)"),
+    status: Optional[str] = Query(None, description="Filter by status (open, acknowledged, resolved, dismissed)"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Items per page"),
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """
+    Lists risk assessments for a farm with filtering and pagination.
+    Verifies user has access to target farm.
+    """
+    await check_farm_access(db, farm_id=farm_id, user=user)
+    risks, total = await RiskService.get_risks_paginated(
+        session=db,
+        farm_id=farm_id,
+        zone_id=zone_id,
+        risk_type=risk_type,
+        severity=severity,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
+    return APIResponse(
+        success=True,
+        data=[RiskAssessmentResponse.model_validate(r) for r in risks],
+        message=f"Retrieved {len(risks)} of {total} risk assessments",
+    )
+

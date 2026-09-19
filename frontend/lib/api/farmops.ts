@@ -141,28 +141,36 @@ export async function getObservations(farmId: string, options?: RequestOptions):
 }
 
 // ==========================================
-// 7. RISKS
+// 7. RISKS & RISK DETECTION
 // ==========================================
 
 export async function getRisks(
   farmId: string,
   params?: {
     zone_id?: string;
+    risk_type?: string;
     severity?: string;
     status?: string;
     page?: number;
     page_size?: number;
   },
   options?: RequestOptions
-): Promise<APIResponse<PaginatedResponse<RiskAssessment>>> {
-  return apiClient.get<PaginatedResponse<RiskAssessment>>(`/farms/${farmId}/risks`, {
+): Promise<APIResponse<RiskAssessment[]>> {
+  return apiClient.get<RiskAssessment[]>(`/farms/${farmId}/risks`, {
     ...options,
     params: params as Record<string, string | number | boolean | undefined | null>,
   });
 }
 
+export async function detectRisks(
+  data: { farm_id: string; zone_id?: string | null; telemetry_override?: Record<string, unknown> | null },
+  options?: RequestOptions
+): Promise<APIResponse<RiskAssessment[]>> {
+  return apiClient.post<RiskAssessment[]>("/risks/detect", data, options);
+}
+
 export async function getRiskDetail(riskId: string, options?: RequestOptions): Promise<APIResponse<RiskAssessment>> {
-  return apiClient.get<RiskAssessment>(`/risks/detail/${riskId}`, options);
+  return apiClient.get<RiskAssessment>(`/risks/${riskId}`, options);
 }
 
 export async function evaluateRisks(

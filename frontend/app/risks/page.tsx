@@ -1,9 +1,21 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { AppShell } from "../../components/app-shell";
 import { Card } from "../../components/ui";
 import { useFarm } from "../../context/farm-context";
+import {
+  getRisks,
+  detectRisks,
+} from "../../lib/api/farmops";
+import {
+  formatRiskType,
+  getSeverityStyle,
+  formatConfidence,
+  resolveZoneName,
+  formatRiskStatus,
+} from "../../lib/risks";
+import type { RiskAssessment, RiskEvidence } from "../../types/api";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -11,182 +23,140 @@ import {
   Radio,
   ShieldAlert,
   Sliders,
+  RefreshCw,
+  Play,
+  Clock,
+  Layers,
+  Activity,
+  X,
 } from "lucide-react";
 
-// Exact precalculated metrics from data/raw/edge-agricultural-sensor/agriculture_dataset_with_target.csv
-const DATASET_CATEGORY_STATS = {
-  ALL: {
-    count: 2000,
-    pct: "100.0%",
-    metrics: {
-      Soil_Moisture: { mean: 24.95, min: 5.13, max: 44.99 },
-      Soil_Temperature: { mean: 22.41, min: 10.0, max: 34.99 },
-      Soil_pH: { mean: 6.74, min: 5.5, max: 8.0 },
-      Humidity: { mean: 61.71, min: 30.02, max: 94.96 },
-      Air_Temperature: { mean: 27.29, min: 15.0, max: 39.99 },
-      Solar_Radiation: { mean: 604.38, min: 200.13, max: 999.74 },
-      Wind_Speed: { mean: 5.06, min: 0.21, max: 9.99 },
-      NDVI_Index: { mean: 0.57, min: 0.2, max: 0.95 },
-      "5G_Latency_ms": { mean: 5.6, min: 1.0, max: 9.99 },
-    },
-  },
-  High_Stress: {
-    count: 688,
-    pct: "34.4%",
-    metrics: {
-      Soil_Moisture: { mean: 24.24, min: 5.13, max: 44.85 },
-      Soil_Temperature: { mean: 22.37, min: 10.0, max: 34.99 },
-      Soil_pH: { mean: 6.73, min: 5.5, max: 8.0 },
-      Humidity: { mean: 60.74, min: 30.02, max: 94.93 },
-      Air_Temperature: { mean: 27.49, min: 15.09, max: 39.97 },
-      Solar_Radiation: { mean: 596.02, min: 200.75, max: 999.74 },
-      Wind_Speed: { mean: 5.09, min: 0.21, max: 9.99 },
-      NDVI_Index: { mean: 0.57, min: 0.2, max: 0.95 },
-      "5G_Latency_ms": { mean: 5.65, min: 1.0, max: 9.97 },
-    },
-  },
-  Moderate_Stress: {
-    count: 633,
-    pct: "31.6%",
-    metrics: {
-      Soil_Moisture: { mean: 25.19, min: 5.21, max: 44.98 },
-      Soil_Temperature: { mean: 22.92, min: 10.1, max: 34.97 },
-      Soil_pH: { mean: 6.79, min: 5.5, max: 7.99 },
-      Humidity: { mean: 61.43, min: 30.05, max: 94.8 },
-      Air_Temperature: { mean: 27.52, min: 15.0, max: 39.89 },
-      Solar_Radiation: { mean: 612.63, min: 201.71, max: 998.89 },
-      Wind_Speed: { mean: 4.96, min: 0.21, max: 9.99 },
-      NDVI_Index: { mean: 0.58, min: 0.2, max: 0.95 },
-      "5G_Latency_ms": { mean: 5.42, min: 1.01, max: 9.97 },
-    },
-  },
-  Healthy: {
-    count: 679,
-    pct: "34.0%",
-    metrics: {
-      Soil_Moisture: { mean: 25.44, min: 5.2, max: 44.99 },
-      Soil_Temperature: { mean: 21.97, min: 10.0, max: 34.95 },
-      Soil_pH: { mean: 6.71, min: 5.5, max: 7.99 },
-      Humidity: { mean: 62.95, min: 30.24, max: 94.96 },
-      Air_Temperature: { mean: 26.88, min: 15.01, max: 39.99 },
-      Solar_Radiation: { mean: 605.15, min: 200.13, max: 999.47 },
-      Wind_Speed: { mean: 5.12, min: 0.21, max: 9.98 },
-      NDVI_Index: { mean: 0.57, min: 0.2, max: 0.95 },
-      "5G_Latency_ms": { mean: 5.71, min: 1.01, max: 9.99 },
-    },
-  },
-};
-
-interface ParameterMetadata {
-  header: keyof (typeof DATASET_CATEGORY_STATS)["ALL"]["metrics"];
-  title: string;
-  sourceUnit: string;
-  scientificUnitStatus: "Verified" | "Not specified in source";
-  evidenceNature: "Direct Dataset Observation" | "Proposed Agronomic Rule-of-Thumb";
-  sourceDocument: string;
-  interpretation: string;
-  statusImplication: string;
-}
-
-const PARAMETER_METADATA: ParameterMetadata[] = [
-  {
-    header: "Soil_Moisture",
-    title: "Soil Moisture",
-    sourceUnit: "Unspecified (numeric scale 5.13 – 44.99)",
-    scientificUnitStatus: "Not specified in source",
-    evidenceNature: "Direct Dataset Observation",
-    sourceDocument: "Colabsss Edge Sensor CSV (Jan–Mar 2024)",
-    interpretation: "Dataset records show a slight decrease in High_Stress (mean 24.24 vs 25.44 in Healthy).",
-    statusImplication: "Proposed agronomic check: monitor root zone if tensiometer or local probe drops below 15. Unvalidated for specific user soils.",
-  },
-  {
-    header: "Soil_Temperature",
-    title: "Soil Temperature",
-    sourceUnit: "Unspecified (presumed °C but undocumented)",
-    scientificUnitStatus: "Not specified in source",
-    evidenceNature: "Direct Dataset Observation",
-    sourceDocument: "Colabsss Edge Sensor CSV (Jan–Mar 2024)",
-    interpretation: "Mean stays tightly centered between 21.97 and 22.92 across all 3 health categories.",
-    statusImplication: "Soil thermal inertia buffers ambient fluctuations. No standalone diagnostic correlation established in source archive.",
-  },
-  {
-    header: "Soil_pH",
-    title: "Soil Reaction (pH)",
-    sourceUnit: "Standard pH scale [5.50 – 8.00]",
-    scientificUnitStatus: "Verified",
-    evidenceNature: "Proposed Agronomic Rule-of-Thumb",
-    sourceDocument: "FAO / ICAR Standard Agronomic Benchmark",
-    interpretation: "Observed dataset mean is 6.74 across all 2,000 records, within optimal nutrient availability zone.",
-    statusImplication: "Standard agronomic rule: pH between 6.0 and 7.5 optimizes macronutrient assimilation. Requires local lab soil test.",
-  },
-  {
-    header: "Humidity",
-    title: "Relative Humidity",
-    sourceUnit: "Unspecified (presumed % RH, range 30.02 – 94.96)",
-    scientificUnitStatus: "Not specified in source",
-    evidenceNature: "Direct Dataset Observation",
-    sourceDocument: "Colabsss Edge Sensor CSV (Jan–Mar 2024)",
-    interpretation: "Observed dataset mean is 61.71; Healthy rows exhibit slightly higher mean (62.95).",
-    statusImplication: "Proposed threshold: Sustained high humidity (>85%) warrants manual foliar inspection for fungal spore germination.",
-  },
-  {
-    header: "Air_Temperature",
-    title: "Air Temperature",
-    sourceUnit: "Unspecified (presumed °C, range 15.00 – 39.99)",
-    scientificUnitStatus: "Not specified in source",
-    evidenceNature: "Direct Dataset Observation",
-    sourceDocument: "Colabsss Edge Sensor CSV (Jan–Mar 2024)",
-    interpretation: "Healthy records have lower mean (26.88) compared to Moderate (27.52) and High Stress (27.49).",
-    statusImplication: "Proposed threshold: Extreme daytime spikes (>38) warrant thermal mitigation checks. Not a disease diagnosis.",
-  },
-  {
-    header: "Solar_Radiation",
-    title: "Solar Radiation",
-    sourceUnit: "Unspecified (range 200.13 – 999.74)",
-    scientificUnitStatus: "Not specified in source",
-    evidenceNature: "Direct Dataset Observation",
-    sourceDocument: "Colabsss Edge Sensor CSV (Jan–Mar 2024)",
-    interpretation: "Mean across dataset is 604.38; values vary widely across all subsets without clear categorical separation.",
-    statusImplication: "High radiation (>900) elevates canopy evapotranspiration demand; manual irrigation check suggested.",
-  },
-  {
-    header: "Wind_Speed",
-    title: "Wind Speed",
-    sourceUnit: "Unspecified (range 0.21 – 9.99)",
-    scientificUnitStatus: "Not specified in source",
-    evidenceNature: "Direct Dataset Observation",
-    sourceDocument: "Colabsss Edge Sensor CSV (Jan–Mar 2024)",
-    interpretation: "Mean is 5.06 uniformly across all subsets; no statistical distinction between health classes.",
-    statusImplication: "Operational threshold: Higher winds (>8) increase spray drift risk during manual application.",
-  },
-  {
-    header: "NDVI_Index",
-    title: "NDVI Vegetation Index",
-    sourceUnit: "Unitless index ratio [-1.0 to 1.0]",
-    scientificUnitStatus: "Verified",
-    evidenceNature: "Direct Dataset Observation",
-    sourceDocument: "Colabsss Edge Sensor CSV (Jan–Mar 2024)",
-    interpretation: "Mean is 0.57 across all 3 classes (min 0.20, max 0.95). NDVI alone does not separate labels in this dataset.",
-    statusImplication: "General remote-sensing guideline: Values <0.25 indicate sparse canopy; physical ground-truth scouting required.",
-  },
-  {
-    header: "5G_Latency_ms",
-    title: "5G Edge Latency",
-    sourceUnit: "Milliseconds (ms)",
-    scientificUnitStatus: "Verified",
-    evidenceNature: "Direct Dataset Observation",
-    sourceDocument: "Colabsss Edge Sensor CSV (explicit unit in header)",
-    interpretation: "Mean is 5.60 ms (range 1.00 – 9.99 ms). Sole parameter with explicit unit in header.",
-    statusImplication: "Network transport telemetry delay only; zero biological or agronomic relevance.",
-  },
-];
-
 export default function RiskCenterPage() {
-  const { formatNumber } = useFarm();
-  const [selectedCategory, setSelectedCategory] = useState<"ALL" | "High_Stress" | "Moderate_Stress" | "Healthy">("ALL");
+  const { selectedFarmId, selectedFarm, backendZones, formatNumber } = useFarm();
+
   const [activeTab, setActiveTab] = useState<"overview" | "provenance" | "telemetry">("overview");
 
-  const currentStats = DATASET_CATEGORY_STATS[selectedCategory];
+  // Real backend risk state
+  const [risks, setRisks] = useState<RiskAssessment[]>([]);
+  const [isLoadingRisks, setIsLoadingRisks] = useState<boolean>(false);
+  const [isDetecting, setIsDetecting] = useState<boolean>(false);
+  const [risksError, setRisksError] = useState<string | null>(null);
+  const [notification, setNotification] = useState<{
+    type: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
+
+  // Filters
+  const [severityFilter, setSeverityFilter] = useState<string>("all");
+  const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  // Load risks whenever selected farm changes
+  const loadRisks = useCallback(async (farmId: string) => {
+    setIsLoadingRisks(true);
+    setRisksError(null);
+    try {
+      const res = await getRisks(farmId);
+      if (res.data && Array.isArray(res.data)) {
+        setRisks(res.data);
+      } else {
+        setRisks([]);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to load risk assessments from backend.";
+      setRisksError(msg);
+      setRisks([]);
+    } finally {
+      setIsLoadingRisks(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedFarmId) {
+      // Immediately reset previous farm's risk data to prevent stale display
+      setRisks([]);
+      setRisksError(null);
+      void loadRisks(selectedFarmId);
+    } else {
+      setRisks([]);
+      setIsLoadingRisks(false);
+      setRisksError(null);
+    }
+  }, [selectedFarmId, loadRisks]);
+
+  // Trigger deterministic risk detection
+  const handleRunDetection = async () => {
+    if (!selectedFarmId || isDetecting) return;
+    setIsDetecting(true);
+    setNotification(null);
+    try {
+      const res = await detectRisks({ farm_id: selectedFarmId });
+      const detectedCount = res.data?.length ?? 0;
+      setNotification({
+        type: "success",
+        message: `Risk detection completed: ${detectedCount} assessment${detectedCount === 1 ? "" : "s"} evaluated.`,
+      });
+      // Refresh list to display newly saved assessments
+      await loadRisks(selectedFarmId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Risk detection failed.";
+      setNotification({
+        type: "error",
+        message: msg,
+      });
+    } finally {
+      setIsDetecting(false);
+    }
+  };
+
+  // Filtered risks
+  const filteredRisks = useMemo(() => {
+    return risks.filter((r) => {
+      if (severityFilter !== "all" && r.severity.toLowerCase() !== severityFilter.toLowerCase()) {
+        return false;
+      }
+      if (typeFilter !== "all" && r.risk_type.toLowerCase() !== typeFilter.toLowerCase()) {
+        return false;
+      }
+      if (statusFilter !== "all" && r.status.toLowerCase() !== statusFilter.toLowerCase()) {
+        return false;
+      }
+      return true;
+    });
+  }, [risks, severityFilter, typeFilter, statusFilter]);
+
+  // Dynamic statistics calculated from live risks
+  const totalRisksCount = risks.length;
+  const criticalAndHighCount = useMemo(() => {
+    return risks.filter((r) => {
+      const s = r.severity.toLowerCase();
+      return s === "critical" || s === "high";
+    }).length;
+  }, [risks]);
+
+  const mediumCount = useMemo(() => {
+    return risks.filter((r) => {
+      const s = r.severity.toLowerCase();
+      return s === "medium" || s === "moderate";
+    }).length;
+  }, [risks]);
+
+  const lowAndResolvedCount = useMemo(() => {
+    return risks.filter((r) => {
+      const s = r.severity.toLowerCase();
+      const st = r.status.toLowerCase();
+      return s === "low" || st === "resolved";
+    }).length;
+  }, [risks]);
+
+  // Unique risk types present in current farm
+  const availableRiskTypes = useMemo(() => {
+    const types = new Set<string>();
+    risks.forEach((r) => {
+      if (r.risk_type) types.add(r.risk_type.toLowerCase());
+    });
+    return Array.from(types);
+  }, [risks]);
 
   return (
     <AppShell title="Risk Center">
@@ -195,36 +165,95 @@ export default function RiskCenterPage() {
         <div>
           <div className="mb-2 flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-rose-600">
-              Risk Evidence & Agronomic Thresholds
+              Deterministic Agronomic Detection
             </span>
             <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">
-              Verified Dataset Calculations
+              {selectedFarm ? selectedFarm.name : "No Farm Selected"}
             </span>
           </div>
           <h1 className="text-2xl font-bold text-ink sm:text-3xl">
             Agronomic & Sensor Risk Center
           </h1>
           <p className="mt-1 text-sm text-slate-600 max-w-3xl">
-            Statistical analysis of environmental stress distributions from verified research telemetry. All metrics reflect exact calculations across 2,000 hourly dataset records. No synthetic farm diagnosis is generated.
+            Real-time deterministic risk evaluations for water stress, pest/disease susceptibility, and nutrient deficiency based on live sensor telemetry and agronomic thresholds.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50/70 px-3.5 py-2 text-xs font-semibold text-rose-800">
-            <ShieldAlert size={15} className="text-rose-600" />
-            Live Hardware: Disconnected
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Refresh Button */}
+          {selectedFarmId && (
+            <button
+              type="button"
+              disabled={isLoadingRisks}
+              onClick={() => void loadRisks(selectedFarmId)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[#dfe6dd] bg-white px-3.5 py-2 text-xs font-semibold text-ink shadow-2xs hover:bg-slate-50 disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={isLoadingRisks ? "animate-spin text-forest-700" : "text-slate-500"} />
+              Refresh
+            </button>
+          )}
+
+          {/* Run Detection Button */}
+          <button
+            type="button"
+            disabled={!selectedFarmId || isDetecting}
+            onClick={() => void handleRunDetection()}
+            className="inline-flex items-center gap-2 rounded-xl bg-forest-700 px-4 py-2 text-xs font-semibold text-white shadow-2xs hover:bg-forest-800 disabled:opacity-50"
+          >
+            {isDetecting ? (
+              <>
+                <RefreshCw size={14} className="animate-spin" />
+                Detecting Risks...
+              </>
+            ) : (
+              <>
+                <Play size={14} className="fill-current" />
+                Run Risk Detection
+              </>
+            )}
+          </button>
         </div>
       </div>
 
-      {/* Boundary & Methodology Disclosure Banner */}
+      {/* User Feedback Notification */}
+      {notification && (
+        <div
+          className={`mt-4 flex items-center justify-between rounded-xl border p-3.5 text-xs font-medium ${
+            notification.type === "success"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+              : notification.type === "error"
+              ? "border-rose-200 bg-rose-50 text-rose-900"
+              : "border-blue-200 bg-blue-50 text-blue-900"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {notification.type === "success" ? (
+              <CheckCircle2 size={16} className="text-emerald-600" />
+            ) : notification.type === "error" ? (
+              <AlertTriangle size={16} className="text-rose-600" />
+            ) : (
+              <Info size={16} className="text-blue-600" />
+            )}
+            <span>{notification.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setNotification(null)}
+            className="text-slate-400 hover:text-slate-600"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Boundary & Advisory Disclosure Banner */}
       <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50/90 p-4 text-xs text-amber-950">
         <div className="flex items-start gap-3">
           <Info size={18} className="mt-0.5 shrink-0 text-amber-600" />
           <div className="space-y-1">
-            <p className="font-semibold">Evidence Grounding & Non-Diagnostic Disclosure</p>
+            <p className="font-semibold">Deterministic Agronomic Boundary & Non-Autonomous Grounding</p>
             <p className="leading-relaxed text-amber-900">
-              The statistics below are derived from the verified <strong>Edge Assisted Agricultural Sensor Dataset</strong> (2,000 rows, Jan 1 – Mar 24, 2024). Source column headers do not specify physical measurement units (except for 5G latency in ms). The categorical label (<code>Healthy</code>, <code>Moderate_Stress</code>, <code>High_Stress</code>) is a source dataset label and must <strong>never</strong> be interpreted as a certified botanical diagnosis of your actual field parcels.
+              Risk assessments evaluate verified telemetry readings against agronomic models. They provide advisory flags for field investigation and must <strong>never</strong> trigger automated biological actuators or chemical sprayers without physical farmer scouting and ground-truth verification.
             </p>
           </div>
         </div>
@@ -241,7 +270,7 @@ export default function RiskCenterPage() {
               : "border-transparent text-slate-500 hover:text-ink"
           }`}
         >
-          Stress Distributions & Parameter Thresholds
+          Active Risk Assessments & Detection ({risks.length})
         </button>
         <button
           type="button"
@@ -267,88 +296,83 @@ export default function RiskCenterPage() {
         </button>
       </div>
 
+      {/* TAB 1: Real Backend Risk Assessments */}
       {activeTab === "overview" && (
         <div className="mt-6 space-y-6">
-          {/* Category Metric Cards */}
+          {/* Dynamic Summary Cards derived from backend risks */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Card
-              className={`p-5 transition-all cursor-pointer ${
-                selectedCategory === "High_Stress"
-                  ? "ring-2 ring-rose-500 border-rose-300 bg-rose-50/50"
-                  : "border-rose-200 bg-rose-50/20 hover:bg-rose-50/30"
-              }`}
-              onClick={() => setSelectedCategory("High_Stress")}
-            >
+            {/* Critical & High */}
+            <Card className="border-rose-200 bg-rose-50/20 p-5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700">
-                  High Stress Frequency
+                  Critical & High Severity
                 </span>
                 <span className="rounded bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-800">
-                  Kaggle Source
+                  Immediate Attention
                 </span>
               </div>
               <div className="mt-3 flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-rose-900">34.4%</span>
-                <span className="text-xs text-rose-700 font-mono">
-                  ({formatNumber(688)} / {formatNumber(2000)} rows)
+                <span className="text-3xl font-extrabold text-rose-900">
+                  {formatNumber(criticalAndHighCount)}
+                </span>
+                <span className="text-xs font-mono text-rose-700">
+                  {totalRisksCount > 0
+                    ? `(${Math.round((criticalAndHighCount / totalRisksCount) * 100)}% of active)`
+                    : "assessments"}
                 </span>
               </div>
-              <p className="mt-2 text-xs text-slate-600 leading-relaxed">
-                Mean soil moisture 24.24 (vs 25.44 in Healthy). Zero missing cells across 688 observations.
+              <p className="mt-2 text-xs leading-relaxed text-slate-600">
+                Water stress depletion, acute pathogen pressure, or critical nutrient imbalances.
               </p>
             </Card>
 
-            <Card
-              className={`p-5 transition-all cursor-pointer ${
-                selectedCategory === "Moderate_Stress"
-                  ? "ring-2 ring-amber-500 border-amber-300 bg-amber-50/50"
-                  : "border-amber-200 bg-amber-50/20 hover:bg-amber-50/30"
-              }`}
-              onClick={() => setSelectedCategory("Moderate_Stress")}
-            >
+            {/* Medium / Moderate */}
+            <Card className="border-amber-200 bg-amber-50/20 p-5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
-                  Moderate Stress Frequency
+                  Medium / Moderate Stress
                 </span>
                 <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
-                  Kaggle Source
+                  Watch List
                 </span>
               </div>
               <div className="mt-3 flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-amber-900">31.6%</span>
-                <span className="text-xs text-amber-700 font-mono">
-                  ({formatNumber(633)} / {formatNumber(2000)} rows)
+                <span className="text-3xl font-extrabold text-amber-900">
+                  {formatNumber(mediumCount)}
+                </span>
+                <span className="text-xs font-mono text-amber-700">
+                  {totalRisksCount > 0
+                    ? `(${Math.round((mediumCount / totalRisksCount) * 100)}% of active)`
+                    : "assessments"}
                 </span>
               </div>
-              <p className="mt-2 text-xs text-slate-600 leading-relaxed">
-                Intermediate parameter telemetry. Mean air temp 27.52, soil moisture 25.19.
+              <p className="mt-2 text-xs leading-relaxed text-slate-600">
+                Transitory moisture dip or ambient humidity favoring fungal incubation.
               </p>
             </Card>
 
-            <Card
-              className={`p-5 transition-all cursor-pointer ${
-                selectedCategory === "Healthy"
-                  ? "ring-2 ring-emerald-500 border-emerald-300 bg-emerald-50/50"
-                  : "border-emerald-200 bg-emerald-50/20 hover:bg-emerald-50/30"
-              }`}
-              onClick={() => setSelectedCategory("Healthy")}
-            >
+            {/* Low & Resolved */}
+            <Card className="border-emerald-200 bg-emerald-50/20 p-5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
-                  Healthy Classification
+                  Low / Monitored Risks
                 </span>
                 <span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
-                  Kaggle Source
+                  Nominal
                 </span>
               </div>
               <div className="mt-3 flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-emerald-900">34.0%</span>
-                <span className="text-xs text-emerald-700 font-mono">
-                  ({formatNumber(679)} / {formatNumber(2000)} rows)
+                <span className="text-3xl font-extrabold text-emerald-900">
+                  {formatNumber(lowAndResolvedCount)}
+                </span>
+                <span className="text-xs font-mono text-emerald-700">
+                  {totalRisksCount > 0
+                    ? `(${Math.round((lowAndResolvedCount / totalRisksCount) * 100)}% of active)`
+                    : "assessments"}
                 </span>
               </div>
-              <p className="mt-2 text-xs text-slate-600 leading-relaxed">
-                Baseline vegetative state. Highest mean humidity (62.95) and lowest air temp (26.88).
+              <p className="mt-2 text-xs leading-relaxed text-slate-600">
+                Mild fluctuations within physiological tolerances or previously resolved conditions.
               </p>
             </Card>
           </div>
@@ -357,115 +381,346 @@ export default function RiskCenterPage() {
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#dfe6dd] bg-white p-3.5 shadow-2xs">
             <div className="flex items-center gap-2 text-xs font-semibold text-ink">
               <Sliders size={15} className="text-forest-600" />
-              <span>Active Telemetry Filter:</span>
+              <span>Active Scope:</span>
               <span className="font-bold text-forest-800">
-                {selectedCategory === "ALL" ? "All Dataset Rows (N = 2,000)" : `${selectedCategory.replace("_", " ")} (N = ${formatNumber(currentStats.count)})`}
+                {selectedFarm ? selectedFarm.name : "No Farm"} ({filteredRisks.length} of {risks.length} risks shown)
               </span>
             </div>
-            <div className="flex flex-wrap gap-1.5 text-xs font-medium">
-              {(["ALL", "High_Stress", "Moderate_Stress", "Healthy"] as const).map((filter) => (
-                <button
-                  key={filter}
-                  type="button"
-                  onClick={() => setSelectedCategory(filter)}
-                  className={`rounded-lg px-3 py-1 transition-all ${
-                    selectedCategory === filter
-                      ? "bg-forest-700 text-white font-semibold shadow-2xs"
-                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                  }`}
+
+            {/* Filter controls */}
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              {/* Severity filter */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500 font-medium">Severity:</span>
+                <select
+                  value={severityFilter}
+                  onChange={(e) => setSeverityFilter(e.target.value)}
+                  className="rounded-lg border border-[#dfe6dd] bg-slate-50 px-2.5 py-1 text-xs font-medium text-ink focus:border-forest-600 focus:outline-hidden"
                 >
-                  {filter === "ALL" ? "All Records (2,000)" : filter.replace("_", " ")}
+                  <option value="all">All Severities</option>
+                  <option value="critical">Critical</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </div>
+
+              {/* Risk Type filter */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500 font-medium">Type:</span>
+                <select
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                  className="rounded-lg border border-[#dfe6dd] bg-slate-50 px-2.5 py-1 text-xs font-medium text-ink focus:border-forest-600 focus:outline-hidden"
+                >
+                  <option value="all">All Types</option>
+                  <option value="water_stress">Water Stress</option>
+                  <option value="pest_disease">Pest / Disease</option>
+                  <option value="nutrient_deficiency">Nutrient Deficiency</option>
+                  <option value="heat_stress">Heat Stress</option>
+                  <option value="frost">Frost Hazard</option>
+                  {availableRiskTypes
+                    .filter(
+                      (t) =>
+                        ![
+                          "water_stress",
+                          "pest_disease",
+                          "nutrient_deficiency",
+                          "heat_stress",
+                          "frost",
+                        ].includes(t)
+                    )
+                    .map((t) => (
+                      <option key={t} value={t}>
+                        {formatRiskType(t)}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {/* Status filter */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500 font-medium">Status:</span>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="rounded-lg border border-[#dfe6dd] bg-slate-50 px-2.5 py-1 text-xs font-medium text-ink focus:border-forest-600 focus:outline-hidden"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="open">Open</option>
+                  <option value="acknowledged">Acknowledged</option>
+                  <option value="resolved">Resolved</option>
+                  <option value="dismissed">Dismissed</option>
+                </select>
+              </div>
+
+              {/* Clear filters button if active */}
+              {(severityFilter !== "all" || typeFilter !== "all" || statusFilter !== "all") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSeverityFilter("all");
+                    setTypeFilter("all");
+                    setStatusFilter("all");
+                  }}
+                  className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+                >
+                  Reset
                 </button>
-              ))}
+              )}
             </div>
           </div>
 
-          {/* Parameter Risk Matrix Table */}
-          <Card className="p-0 overflow-hidden">
-            <div className="border-b border-[#edf0eb] px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-bold text-ink">
-                  Observed Parameter Statistics & Threshold Analysis
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Dynamically calculated values for: <strong>{selectedCategory.replace("_", " ")}</strong> (Sample Size N = {formatNumber(currentStats.count)})
-                </p>
-              </div>
-              <span className="font-mono text-xs text-slate-400">
-                12 Columns • 0 Missing Cells in Subset
-              </span>
-            </div>
+          {/* Loading State */}
+          {isLoadingRisks && (
+            <Card className="flex flex-col items-center justify-center p-12 text-center">
+              <RefreshCw size={28} className="animate-spin text-forest-600" />
+              <p className="mt-3 text-sm font-semibold text-ink">
+                Loading risk assessments for {selectedFarm?.name || "selected farm"}...
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Querying verified backend agronomic evaluation records.
+              </p>
+            </Card>
+          )}
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-[#f7f8f6] text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                  <tr>
-                    <th className="px-5 py-3">Telemetry Metric</th>
-                    <th className="px-4 py-3">Source Header</th>
-                    <th className="px-4 py-3">Observed Mean</th>
-                    <th className="px-4 py-3">Observed Range (Min – Max)</th>
-                    <th className="px-4 py-3">Documented Unit Status</th>
-                    <th className="px-4 py-3">Grounding Source & Type</th>
-                    <th className="px-4 py-3">Agronomic Implication / Boundary</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#edf0eb]">
-                  {PARAMETER_METADATA.map((param) => {
-                    const stat = currentStats.metrics[param.header];
-                    return (
-                      <tr key={param.header} className="hover:bg-[#fafbf9]">
-                        <td className="px-5 py-3.5 font-semibold text-ink">
-                          {param.title}
-                        </td>
-                        <td className="px-4 py-3 font-mono text-slate-600">
-                          {param.header}
-                        </td>
-                        <td className="px-4 py-3 font-mono font-bold text-ink">
-                          {formatNumber(stat.mean)}
-                        </td>
-                        <td className="px-4 py-3 font-mono text-slate-600">
-                          {formatNumber(stat.min)} – {formatNumber(stat.max)}
-                        </td>
-                        <td className="px-4 py-3">
-                          {param.scientificUnitStatus === "Verified" ? (
-                            <span className="inline-flex items-center gap-1 font-medium text-emerald-700">
-                              <CheckCircle2 size={12} />
-                              {param.sourceUnit}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 italic text-amber-700">
-                              <AlertTriangle size={12} />
-                              Not specified in source
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                              param.evidenceNature === "Direct Dataset Observation"
-                                ? "bg-blue-100 text-blue-800"
-                                : "bg-amber-100 text-amber-800"
-                            }`}
-                          >
-                            {param.evidenceNature}
-                          </span>
-                          <span className="block text-[10px] text-slate-500 mt-0.5">
-                            {param.sourceDocument}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-slate-700 leading-relaxed">
-                          {param.statusImplication}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+          {/* Error State */}
+          {!isLoadingRisks && risksError && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-center">
+              <AlertTriangle size={28} className="mx-auto text-rose-600" />
+              <h3 className="mt-2 text-sm font-bold text-rose-900">
+                Unable to Load Farm Risks
+              </h3>
+              <p className="mt-1 text-xs text-rose-700 max-w-md mx-auto">
+                {risksError}
+              </p>
+              {selectedFarmId && (
+                <button
+                  type="button"
+                  onClick={() => void loadRisks(selectedFarmId)}
+                  className="mt-4 rounded-lg bg-rose-700 px-3.5 py-1.5 text-xs font-semibold text-white shadow-2xs hover:bg-rose-800"
+                >
+                  Retry
+                </button>
+              )}
             </div>
-          </Card>
+          )}
+
+          {/* Empty State (No risks recorded yet) */}
+          {!isLoadingRisks && !risksError && risks.length === 0 && (
+            <Card className="flex flex-col items-center justify-center p-12 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                <ShieldAlert size={24} />
+              </div>
+              <h3 className="mt-4 text-base font-bold text-ink">
+                No Risk Assessments Recorded
+              </h3>
+              <p className="mt-1 text-xs text-slate-600 max-w-md">
+                No active agronomic risk records currently exist for <strong>{selectedFarm?.name || "this farm"}</strong>. You can trigger deterministic risk detection to evaluate current zone sensor telemetry against water stress, pest/disease, and nutrient deficiency rules.
+              </p>
+              <button
+                type="button"
+                disabled={!selectedFarmId || isDetecting}
+                onClick={() => void handleRunDetection()}
+                className="mt-5 inline-flex items-center gap-2 rounded-xl bg-forest-700 px-4 py-2.5 text-xs font-semibold text-white shadow-2xs hover:bg-forest-800 disabled:opacity-50"
+              >
+                {isDetecting ? (
+                  <>
+                    <RefreshCw size={14} className="animate-spin" />
+                    Running Detection...
+                  </>
+                ) : (
+                  <>
+                    <Play size={14} className="fill-current" />
+                    Run Risk Detection Now
+                  </>
+                )}
+              </button>
+            </Card>
+          )}
+
+          {/* Empty Filtered Results */}
+          {!isLoadingRisks && !risksError && risks.length > 0 && filteredRisks.length === 0 && (
+            <Card className="flex flex-col items-center justify-center p-10 text-center">
+              <Info size={24} className="text-slate-400" />
+              <h4 className="mt-2 text-sm font-bold text-ink">
+                No Matching Risk Assessments
+              </h4>
+              <p className="mt-1 text-xs text-slate-500">
+                No risk records match the chosen filters for severity, type, or status.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setSeverityFilter("all");
+                  setTypeFilter("all");
+                  setStatusFilter("all");
+                }}
+                className="mt-3 rounded-lg bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+              >
+                Clear Filters
+              </button>
+            </Card>
+          )}
+
+          {/* Risk Cards List */}
+          {!isLoadingRisks && !risksError && filteredRisks.length > 0 && (
+            <div className="space-y-4">
+              {filteredRisks.map((risk) => {
+                const severityStyle = getSeverityStyle(risk.severity);
+                const statusStyle = formatRiskStatus(risk.status);
+                const zoneName = resolveZoneName(risk.zone_id, backendZones);
+                const evidence = risk.evidence as RiskEvidence | undefined;
+
+                return (
+                  <Card
+                    key={risk.id}
+                    className={`overflow-hidden border p-0 transition-all ${severityStyle.cardBorderClass}`}
+                  >
+                    {/* Header banner */}
+                    <div className={`border-b border-[#edf0eb] px-5 py-4 ${severityStyle.cardBgClass}`}>
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${severityStyle.badgeClass}`}
+                          >
+                            {severityStyle.label} Severity
+                          </span>
+                          <span
+                            className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${statusStyle.badgeClass}`}
+                          >
+                            {statusStyle.label}
+                          </span>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-700">
+                            <Layers size={12} className="text-slate-500" />
+                            {zoneName}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-3 text-xs text-slate-500">
+                          <span className="font-semibold text-slate-700">
+                            {formatConfidence(risk.confidence)}
+                          </span>
+                          <span>•</span>
+                          <span className="font-mono">
+                            Score: {formatNumber(risk.score)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-2">
+                        <h3 className="text-base font-bold text-ink">
+                          {formatRiskType(risk.risk_type)}
+                        </h3>
+                      </div>
+                    </div>
+
+                    {/* Body content */}
+                    <div className="space-y-4 p-5 text-xs">
+                      {/* Agronomic Explanation */}
+                      {evidence?.explanation ? (
+                        <div>
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                            Agronomic Assessment & Findings
+                          </span>
+                          <p className="mt-1 text-xs text-slate-700 leading-relaxed font-medium">
+                            {evidence.explanation}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-600 italic">
+                          Deterministic evaluation flagged conditions exceeding calibrated physiological thresholds.
+                        </p>
+                      )}
+
+                      {/* Evidence Signals Grid */}
+                      {evidence?.signals && evidence.signals.length > 0 && (
+                        <div>
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                            Contributing Telemetry Signals
+                          </span>
+                          <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
+                            {evidence.signals.map((sig, sIdx) => (
+                              <div
+                                key={sIdx}
+                                className="rounded-lg border border-[#dfe6dd] bg-slate-50/70 p-2.5"
+                              >
+                                <span className="block text-[10px] font-semibold uppercase text-slate-500 truncate">
+                                  {sig.name.replace(/_/g, " ")}
+                                </span>
+                                <div className="mt-1 flex items-baseline gap-1">
+                                  <span className="font-mono text-sm font-bold text-ink">
+                                    {typeof sig.value === "number"
+                                      ? formatNumber(sig.value)
+                                      : String(sig.value)}
+                                  </span>
+                                  {sig.unit && (
+                                    <span className="text-[10px] font-semibold text-slate-500">
+                                      {sig.unit}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Rules Triggered Chips */}
+                      {evidence?.rules_triggered && evidence.rules_triggered.length > 0 && (
+                        <div>
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                            Rules Triggered
+                          </span>
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {evidence.rules_triggered.map((rule, rIdx) => (
+                              <span
+                                key={rIdx}
+                                className="rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-700"
+                              >
+                                {rule}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Missing Information Notice */}
+                      {risk.missing_information && risk.missing_information.length > 0 && (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-2.5 text-[11px] text-amber-900">
+                          <span className="font-semibold">Missing telemetry indicators: </span>
+                          <span>{risk.missing_information.join(", ")}</span>
+                        </div>
+                      )}
+
+                      {/* Footer Metadata */}
+                      <div className="mt-3 flex flex-wrap items-center justify-between border-t border-[#edf0eb] pt-3 text-[11px] text-slate-500">
+                        <div className="flex items-center gap-3">
+                          <span className="inline-flex items-center gap-1">
+                            <Activity size={12} className="text-slate-400" />
+                            Agent: {risk.agent} (v{risk.agent_version})
+                          </span>
+                          <span>•</span>
+                          <span className="inline-flex items-center gap-1 font-mono">
+                            <Clock size={12} className="text-slate-400" />
+                            {new Date(risk.created_at).toLocaleString()}
+                          </span>
+                        </div>
+
+                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                          Advisory Diagnostic • Human Confirmation Required
+                        </span>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
+      {/* TAB 2: Dataset Provenance & Rigorous Audit Findings */}
       {activeTab === "provenance" && (
         <div className="mt-6 space-y-6">
           <Card className="p-6">
@@ -506,6 +761,7 @@ export default function RiskCenterPage() {
         </div>
       )}
 
+      {/* TAB 3: Physical Telemetry Pipeline Status */}
       {activeTab === "telemetry" && (
         <div className="mt-6 space-y-6">
           <Card className="p-6">

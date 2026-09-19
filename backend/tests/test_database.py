@@ -50,6 +50,8 @@ def test_supabase_keys_resolution():
     """Verifies fallback resolution for Supabase keys."""
     s = Settings(
         SUPABASE_URL="https://example.supabase.co",
+        SUPABASE_PUBLISHABLE_KEY="",
+        SUPABASE_SECRET_KEY="",
         SUPABASE_ANON_KEY="anon_key_123",
         SUPABASE_SERVICE_ROLE_KEY="service_role_key_456",
     )

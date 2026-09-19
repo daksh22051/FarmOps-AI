@@ -5,7 +5,7 @@ High-throughput telemetry time-series event storage with deduplication guarantee
 
 from typing import TYPE_CHECKING, Optional
 from datetime import datetime, timezone
-from sqlalchemy import String, Float, ForeignKey, DateTime, Integer, Boolean, UniqueConstraint, Index
+from sqlalchemy import String, Float, ForeignKey, DateTime, Integer, Boolean, UniqueConstraint, Index, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, UUIDPrimaryKeyMixin
 
@@ -20,9 +20,11 @@ class SensorEvent(Base, UUIDPrimaryKeyMixin):
     farm_id: Mapped[str] = mapped_column(String(36), ForeignKey("farms.id", ondelete="CASCADE"), index=True, nullable=False)
     zone_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("zones.id", ondelete="SET NULL"), index=True, nullable=True)
     
-    metric: Mapped[str] = mapped_column(String(64), index=True, nullable=False)  # soil_moisture, air_temperature, etc.
-    value: Mapped[float] = mapped_column(Float, nullable=False)
+    metric: Mapped[str] = mapped_column(String(64), index=True, default="multi", nullable=False)  # soil_moisture, air_temperature, etc.
+    value: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     unit: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    measurements: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    metadata_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     
     event_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

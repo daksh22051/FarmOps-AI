@@ -31,4 +31,6 @@ class HealthResponse(BaseModel):
     version: str
     database: str
     environment: str
+    mqtt: Optional[dict] = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+

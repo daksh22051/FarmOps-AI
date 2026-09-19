@@ -30,7 +30,7 @@ if not db_url:
         "Please set DATABASE_URL (Supabase PostgreSQL asyncpg connection string) in .env or your environment variables."
     )
 
-config.set_main_option("sqlalchemy.url", db_url)
+config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

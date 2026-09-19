@@ -47,7 +47,7 @@ class DeviceService:
             calibration=calib,
             credential_reference=data.credential_reference,
             enabled=data.enabled,
-            last_seen_at=datetime.now(timezone.utc),
+            last_seen_at=None,
         )
         session.add(device)
         await session.commit()

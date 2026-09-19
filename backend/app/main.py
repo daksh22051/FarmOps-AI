@@ -107,3 +107,14 @@ async def root():
         "redoc_url": "/redoc",
         "api_v1": settings.API_V1_STR,
     }
+
+
+@app.get("/health", tags=["Root"])
+async def root_health():
+    return {
+        "status": "healthy",
+        "version": settings.VERSION,
+        "environment": settings.ENVIRONMENT,
+        "mqtt": mqtt_worker.get_status(),
+    }
+

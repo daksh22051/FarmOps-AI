@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.database import get_db
 from app.core.logging import logger
+from app.mqtt.client import mqtt_worker
 from app.schemas.common import HealthResponse
 
 router = APIRouter(tags=["Health"])
@@ -30,7 +31,9 @@ async def check_health(db: AsyncSession = Depends(get_db)):
         version=settings.VERSION,
         database=db_status,
         environment=settings.ENVIRONMENT,
+        mqtt=mqtt_worker.get_status(),
     )
+
 
 
 @router.get("/health/db")

@@ -14,15 +14,48 @@ from app.core.security import (
     check_farm_access,
 )
 from app.services.sensor_event_service import SensorEventService
+from app.services.telemetry_service import TelemetryService
 from app.schemas.sensor_event import (
     SensorEventIngest,
     SensorEventBatchIngest,
     SensorEventResponse,
     SensorEventFilter,
 )
+from app.schemas.telemetry import (
+    TelemetryEventCreate,
+    TelemetryEventResponse,
+)
 from app.schemas.common import APIResponse
 
 router = APIRouter(prefix="/telemetry", tags=["Sensor Events & Telemetry Ingestion"])
+
+
+@router.post(
+    "/events",
+    response_model=APIResponse[TelemetryEventResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="Ingest Telemetry Event",
+    description=(
+        "Ingests a single telemetry event from an edge sensor or gateway. "
+        "Validates and normalizes measurement readings, verifies authoritative device-farm-zone hierarchy, "
+        "enforces farm-scoped authorization, deduplicates by (device_id, sequence), "
+        "and updates the device's last-seen timestamp."
+    ),
+)
+async def ingest_telemetry_event(
+    payload: TelemetryEventCreate,
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """
+    Ingests and normalizes an edge telemetry event with strict validation and idempotency.
+    """
+    result = await TelemetryService.ingest_event(db, payload=payload, user=user)
+    return APIResponse(
+        success=True,
+        data=result,
+        message="Telemetry event ingested successfully" if not result.duplicate else "Duplicate event acknowledged",
+    )
 
 
 @router.post("/{farm_id}/events", response_model=APIResponse[SensorEventResponse], status_code=status.HTTP_201_CREATED)

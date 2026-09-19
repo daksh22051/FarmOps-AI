@@ -30,6 +30,17 @@ from app.schemas.escalation import (
     EscalationReviewRequest,
     EscalationResponse,
 )
+from app.schemas.telemetry import (
+    TelemetryEventCreate,
+    TelemetryEventResponse,
+    normalize_measurement_key,
+    validate_and_normalize_measurements,
+)
+from app.schemas.observation import (
+    ExternalObservationCreate,
+    ExternalObservationResponse,
+    ObservationListResponse,
+)
 from app.schemas.audit import AuditEventResponse
 
 __all__ = [
@@ -53,6 +64,13 @@ __all__ = [
     "SensorEventBatchIngest",
     "SensorEventResponse",
     "SensorEventFilter",
+    "TelemetryEventCreate",
+    "TelemetryEventResponse",
+    "normalize_measurement_key",
+    "validate_and_normalize_measurements",
+    "ExternalObservationCreate",
+    "ExternalObservationResponse",
+    "ObservationListResponse",
     "RiskAssessmentResponse",
     "RiskAssessmentEvaluateRequest",
     "ActionPlanResponse",
@@ -67,3 +85,5 @@ __all__ = [
     "EscalationResponse",
     "AuditEventResponse",
 ]
+
+

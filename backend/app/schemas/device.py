@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 VALID_DEVICE_TYPES = {
     "soil_moisture",
     "soil_sensor",
+    "soil_probe",
     "weather",
     "weather_station",
     "npk",
@@ -19,8 +20,12 @@ VALID_DEVICE_TYPES = {
     "multi_sensor",
     "multispectral_camera",
     "gateway",
+    "drone_gateway",
+    "generic_iot",
     "actuator",
+    "irrigation_controller",
     "valve",
+    "valve_actuator",
     "other",
 }
 

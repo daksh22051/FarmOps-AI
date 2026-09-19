@@ -70,9 +70,9 @@ class TelemetryIngestException(FarmOpsException):
 
 
 class AIProviderException(FarmOpsException):
-    def __init__(self, detail: str):
+    def __init__(self, detail: str, code: Optional[str] = None, status_code: int = status.HTTP_502_BAD_GATEWAY):
         super().__init__(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"AI Provider error: {detail}",
-            code="AI_PROVIDER_ERROR",
+            status_code=status_code,
+            detail=detail,
+            code=code or "AI_PROVIDER_ERROR",
         )

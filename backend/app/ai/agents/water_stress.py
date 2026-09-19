@@ -1,18 +1,38 @@
 """
 Water Stress Risk Agent
 Evaluates root-zone volumetric soil moisture, evapotranspiration rates, and crop water demand.
+Outputs structured, advisory-only AIProposal objects.
 """
 
 from typing import Dict, Any, Optional
-from app.ai.provider import AIProviderInterface
-from app.ai.prompts import IRRIGATION_AGENT_PROMPT
+from app.ai.provider import AIProviderInterface, get_ai_provider
+from app.ai.agents.base import BaseAIAgent
+from app.ai.prompts import WATER_STRESS_SYSTEM_PROMPT
+from app.schemas.ai import AIProposal, AgentType
 
 
-class WaterStressAgent:
-    def __init__(self, provider: AIProviderInterface):
-        self.provider = provider
+class WaterStressAgent(BaseAIAgent):
+    def __init__(self, provider: Optional[AIProviderInterface] = None):
+        super().__init__(
+            provider=provider or get_ai_provider(),
+            agent_type=AgentType.WATER_AGENT,
+            version="1.0.0",
+        )
         self.agent_name = "water_stress_agent"
-        self.version = "1.0.0"
+
+    @property
+    def system_prompt(self) -> str:
+        return WATER_STRESS_SYSTEM_PROMPT
+
+    @property
+    def default_risk_type(self) -> str:
+        return "water_stress"
+
+    async def evaluate(self, context: Dict[str, Any]) -> AIProposal:
+        """
+        Generates structured AI advisory proposal for water stress risk.
+        """
+        return await self._generate_and_validate(context)
 
     async def assess_risk(
         self,
@@ -21,54 +41,35 @@ class WaterStressAgent:
         telemetry: Dict[str, Any],
         crop_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        moisture = telemetry.get("soil_moisture", 50.0)
-        temp = telemetry.get("air_temperature", 25.0)
-        
-        # Agronomic risk heuristic
-        if moisture < 20.0:
-            severity = "critical"
-            score = 0.90
-        elif moisture < 30.0:
-            severity = "high"
-            score = 0.75
-        elif moisture < 40.0:
-            severity = "medium"
-            score = 0.45
-        else:
-            severity = "low"
-            score = 0.10
-
-        prompt = (
-            f"Evaluate water stress risk for zone {zone_id or 'farm'}.\n"
-            f"Soil moisture: {moisture}%, Air temperature: {temp}°C.\n"
-            f"Crop context: {crop_context or {}}"
-        )
-        ai_analysis = await self.provider.generate_response(
-            prompt=prompt,
-            system_instruction=IRRIGATION_AGENT_PROMPT,
-            context_data={"telemetry": telemetry, "crop": crop_context},
-        )
-
-        missing_info = []
-        if "solar_radiation" not in telemetry:
-            missing_info.append("solar_radiation")
+        """
+        Legacy evaluation method for backward compatibility with existing orchestrators.
+        """
+        context = {
+            "farm": {"id": farm_id},
+            "zone": {"id": zone_id, "crop": (crop_context or {}).get("crop_name", "Crop")},
+            "risk": {"risk_type": "water_stress", "severity": "medium", "score": 0.6},
+            "telemetry": telemetry,
+            "observations": [],
+        }
+        proposal = await self.evaluate(context)
+        moisture = telemetry.get("soil_moisture", 30.0)
 
         return {
             "farm_id": farm_id,
             "zone_id": zone_id,
             "risk_type": "water_stress",
-            "severity": severity,
-            "score": score,
-            "confidence": 0.92,
+            "severity": proposal.urgency,
+            "score": 0.85 if proposal.urgency in ["high", "critical"] else 0.50,
+            "confidence": proposal.confidence,
             "evidence": {
                 "soil_moisture": moisture,
-                "air_temperature": temp,
-                "analysis": ai_analysis,
+                "analysis": proposal.rationale,
+                "proposal": proposal.model_dump(),
             },
-            "missing_information": missing_info,
+            "missing_information": [] if "soil_moisture" in telemetry else ["soil_moisture"],
             "agent": self.agent_name,
             "agent_version": self.version,
             "recommended_action_type": "irrigate",
-            "recommended_action_summary": f"Deliver precision drip irrigation to restore soil moisture from {moisture}% to 55%.",
+            "recommended_action_summary": proposal.recommendation,
             "estimated_cost": 15.0,
         }

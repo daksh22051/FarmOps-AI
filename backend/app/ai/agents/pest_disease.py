@@ -1,18 +1,38 @@
 """
 Pest and Disease Risk Agent
 Evaluates temperature-humidity index, leaf wetness duration, and pathogen pressure.
+Outputs structured, advisory-only AIProposal objects emphasizing Risk != Diagnosis.
 """
 
 from typing import Dict, Any, Optional
-from app.ai.provider import AIProviderInterface
-from app.ai.prompts import PEST_DISEASE_AGENT_PROMPT
+from app.ai.provider import AIProviderInterface, get_ai_provider
+from app.ai.agents.base import BaseAIAgent
+from app.ai.prompts import PEST_DISEASE_SYSTEM_PROMPT
+from app.schemas.ai import AIProposal, AgentType
 
 
-class PestDiseaseAgent:
-    def __init__(self, provider: AIProviderInterface):
-        self.provider = provider
+class PestDiseaseAgent(BaseAIAgent):
+    def __init__(self, provider: Optional[AIProviderInterface] = None):
+        super().__init__(
+            provider=provider or get_ai_provider(),
+            agent_type=AgentType.PEST_DISEASE_AGENT,
+            version="1.0.0",
+        )
         self.agent_name = "pest_disease_agent"
-        self.version = "1.0.0"
+
+    @property
+    def system_prompt(self) -> str:
+        return PEST_DISEASE_SYSTEM_PROMPT
+
+    @property
+    def default_risk_type(self) -> str:
+        return "pest_disease"
+
+    async def evaluate(self, context: Dict[str, Any]) -> AIProposal:
+        """
+        Generates structured AI advisory proposal for pest and disease risk.
+        """
+        return await self._generate_and_validate(context)
 
     async def assess_risk(
         self,
@@ -21,50 +41,35 @@ class PestDiseaseAgent:
         telemetry: Dict[str, Any],
         crop_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """
+        Legacy evaluation method for backward compatibility with existing orchestrators.
+        """
+        context = {
+            "farm": {"id": farm_id},
+            "zone": {"id": zone_id, "crop": (crop_context or {}).get("crop_name", "Crop")},
+            "risk": {"risk_type": "pest_disease", "severity": "medium", "score": 0.55},
+            "telemetry": telemetry,
+            "observations": [],
+        }
+        proposal = await self.evaluate(context)
         humidity = telemetry.get("air_humidity", 60.0)
-        temp = telemetry.get("air_temperature", 24.0)
-
-        if humidity > 85.0 and 18.0 <= temp <= 28.0:
-            severity = "high"
-            score = 0.85
-        elif humidity > 75.0:
-            severity = "medium"
-            score = 0.55
-        else:
-            severity = "low"
-            score = 0.15
-
-        prompt = (
-            f"Evaluate pest and fungal pathogen risk for zone {zone_id or 'farm'}.\n"
-            f"Air Humidity: {humidity}%, Temperature: {temp}°C.\n"
-            f"Crop context: {crop_context or {}}"
-        )
-        ai_analysis = await self.provider.generate_response(
-            prompt=prompt,
-            system_instruction=PEST_DISEASE_AGENT_PROMPT,
-            context_data={"telemetry": telemetry, "crop": crop_context},
-        )
-
-        missing_info = []
-        if "leaf_wetness_hours" not in telemetry:
-            missing_info.append("leaf_wetness_hours")
 
         return {
             "farm_id": farm_id,
             "zone_id": zone_id,
             "risk_type": "pest_disease",
-            "severity": severity,
-            "score": score,
-            "confidence": 0.88,
+            "severity": proposal.urgency,
+            "score": 0.85 if proposal.urgency in ["high", "critical"] else 0.55,
+            "confidence": proposal.confidence,
             "evidence": {
                 "air_humidity": humidity,
-                "air_temperature": temp,
-                "analysis": ai_analysis,
+                "analysis": proposal.rationale,
+                "proposal": proposal.model_dump(),
             },
-            "missing_information": missing_info,
+            "missing_information": [] if "air_humidity" in telemetry else ["air_humidity"],
             "agent": self.agent_name,
             "agent_version": self.version,
             "recommended_action_type": "apply_biocontrol",
-            "recommended_action_summary": "Perform targeted foliage inspection and apply organic bio-fungicide (Bacillus subtilis).",
+            "recommended_action_summary": proposal.recommendation,
             "estimated_cost": 45.0,
         }

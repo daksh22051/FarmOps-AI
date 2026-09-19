@@ -5,21 +5,34 @@ STRICT CONSTRAINT: Never performs autonomous market buying, selling, or financia
 """
 
 from typing import Dict, Any, Optional
-from app.ai.provider import AIProviderInterface
-
-MARKET_AGENT_PROMPT = """
-You are the FarmOps Market Context Advisory Agent.
-Your mission is to provide situational market awareness to assist farm scheduling.
-Evaluate regional commodity spot prices, harvest price windows, and weather-driven supply dynamics.
-STRICT BOUNDARY: You are an informational advisory service ONLY. You never execute financial trades or transactions.
-"""
+from app.ai.provider import AIProviderInterface, get_ai_provider
+from app.ai.agents.base import BaseAIAgent
+from app.ai.prompts import MARKET_CONTEXT_SYSTEM_PROMPT
+from app.schemas.ai import AIProposal, AgentType
 
 
-class MarketContextAgent:
-    def __init__(self, provider: AIProviderInterface):
-        self.provider = provider
+class MarketContextAgent(BaseAIAgent):
+    def __init__(self, provider: Optional[AIProviderInterface] = None):
+        super().__init__(
+            provider=provider or get_ai_provider(),
+            agent_type=AgentType.MARKET_CONTEXT_AGENT,
+            version="1.0.0",
+        )
         self.agent_name = "market_context_agent"
-        self.version = "1.0.0"
+
+    @property
+    def system_prompt(self) -> str:
+        return MARKET_CONTEXT_SYSTEM_PROMPT
+
+    @property
+    def default_risk_type(self) -> str:
+        return "market_exposure"
+
+    async def evaluate(self, context: Dict[str, Any]) -> AIProposal:
+        """
+        Generates structured AI advisory proposal for market context and harvest timing.
+        """
+        return await self._generate_and_validate(context)
 
     async def assess_risk(
         self,
@@ -28,33 +41,34 @@ class MarketContextAgent:
         crop_name: str = "Produce",
         market_observation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        obs = market_observation or {"spot_price_trend": "stable", "regional_supply": "normal"}
-
-        prompt = (
-            f"Evaluate market pricing and harvest timing context for crop '{crop_name}' in zone {zone_id or 'farm'}.\n"
-            f"Market Observations: {obs}"
-        )
-        ai_analysis = await self.provider.generate_response(
-            prompt=prompt,
-            system_instruction=MARKET_AGENT_PROMPT,
-            context_data={"market": obs, "crop": crop_name},
-        )
+        """
+        Legacy evaluation method for backward compatibility with existing orchestrators.
+        """
+        context = {
+            "farm": {"id": farm_id},
+            "zone": {"id": zone_id, "crop": crop_name},
+            "risk": {"risk_type": "market_exposure", "severity": "low", "score": 0.20},
+            "telemetry": {},
+            "observations": [market_observation] if market_observation else [],
+        }
+        proposal = await self.evaluate(context)
 
         return {
             "farm_id": farm_id,
             "zone_id": zone_id,
             "risk_type": "market_exposure",
-            "severity": "low",
+            "severity": proposal.urgency,
             "score": 0.20,
-            "confidence": 0.80,
+            "confidence": proposal.confidence,
             "evidence": {
-                "market_observation": obs,
-                "analysis": ai_analysis,
+                "market_observation": market_observation or {"status": "unavailable"},
+                "analysis": proposal.rationale,
+                "proposal": proposal.model_dump(),
             },
             "missing_information": [],
             "agent": self.agent_name,
             "agent_version": self.version,
             "recommended_action_type": "adjust_harvest_schedule",
-            "recommended_action_summary": f"Maintain standard harvest window for {crop_name}; market price trajectory is stable.",
+            "recommended_action_summary": proposal.recommendation,
             "estimated_cost": 0.0,
         }

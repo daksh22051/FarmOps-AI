@@ -15,6 +15,7 @@ from app.api.v1.endpoints.tasks import router as tasks_router
 from app.api.v1.endpoints.alerts import router as alerts_router
 from app.api.v1.endpoints.escalations import router as escalations_router
 from app.api.v1.endpoints.observations import router as observations_router
+from app.api.v1.endpoints.ai import router as ai_router
 from app.api.v1.endpoints.audit import router as audit_router
 
 api_v1_router = APIRouter()
@@ -27,6 +28,7 @@ api_v1_router.include_router(devices_router)
 api_v1_router.include_router(telemetry_router)
 api_v1_router.include_router(observations_router)
 api_v1_router.include_router(risks_router)
+api_v1_router.include_router(ai_router)
 api_v1_router.include_router(plans_router)
 api_v1_router.include_router(tasks_router)
 api_v1_router.include_router(alerts_router)

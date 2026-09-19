@@ -115,15 +115,30 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
         {/* Authenticated State */}
         {currentUser ? (
           <div className="mt-5 space-y-5">
-            <div className="rounded-xl border border-[#dfe6dd] bg-[#f8faf7] p-4">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">
               <div className="flex items-center gap-3">
-                <span className="grid h-10 w-10 place-items-center rounded-full bg-forest-700 font-bold text-white text-sm">
-                  {(currentUser.email?.[0] || "U").toUpperCase()}
+                <span className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-[#1b7340] to-emerald-600 font-extrabold text-white text-base shadow-sm">
+                  {(() => {
+                    const meta = currentUser.user_metadata || {};
+                    const name = (meta.full_name as string) || (meta.name as string) || currentUser.email || "U";
+                    return name.trim()[0]?.toUpperCase() || "👤";
+                  })()}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-bold text-ink">{currentUser.email || "Authenticated Operator"}</p>
-                  <p className="text-xs text-slate-500 capitalize">
-                    Role: <span className="font-semibold text-forest-700">{currentUser.role}</span>
+                  <p className="truncate text-sm font-extrabold text-slate-900">
+                    {(() => {
+                      const meta = currentUser.user_metadata || {};
+                      if (typeof meta.full_name === "string" && meta.full_name.trim()) return meta.full_name.trim();
+                      if (typeof meta.name === "string" && meta.name.trim()) return meta.name.trim();
+                      if (currentUser.email) {
+                        return currentUser.email.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+                      }
+                      return "Authenticated Operator";
+                    })()}
+                  </p>
+                  <p className="truncate text-xs text-slate-500">{currentUser.email}</p>
+                  <p className="text-[11px] text-emerald-800 capitalize font-medium mt-0.5">
+                    Role: <span className="font-semibold text-emerald-900">{currentUser.role}</span>
                   </p>
                 </div>
               </div>

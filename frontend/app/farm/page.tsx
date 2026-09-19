@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { AppShell } from "../../components/app-shell";
 import { Card } from "../../components/ui";
 import { useFarm, type FarmZone } from "../../context/farm-context";
@@ -233,7 +234,11 @@ export default function MyFarmPage() {
             <span className="text-xs font-semibold uppercase tracking-wider text-forest-700">
               Farm Hierarchy & Land Registry
             </span>
-            {currentUser && selectedFarm ? (
+            {currentUser && backendFarms.length === 0 ? (
+              <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">
+                No Farm Registered
+              </span>
+            ) : currentUser && selectedFarm ? (
               <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
                 {selectedFarm.is_demo ? "Demo Farm (Backend)" : "Live Backend Farm"}
               </span>
@@ -250,7 +255,11 @@ export default function MyFarmPage() {
 
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-bold text-ink sm:text-3xl">
-              {selectedFarm ? selectedFarm.name : farm.name}
+              {currentUser && backendFarms.length === 0
+                ? "No Farm Registered"
+                : selectedFarm
+                ? selectedFarm.name
+                : farm.name}
             </h1>
 
             {/* Farm Selector if user has multiple backend farms */}
@@ -299,6 +308,15 @@ export default function MyFarmPage() {
             >
               Sign In (Connect Live Backend)
             </button>
+          )}
+          {currentUser && backendFarms.length === 0 && (
+            <Link
+              href="/onboarding"
+              className="inline-flex items-center gap-2 rounded-xl bg-forest-700 px-3.5 py-2 text-xs font-semibold text-white shadow-2xs hover:bg-forest-800"
+            >
+              <Plus size={14} />
+              Create Your First Farm
+            </Link>
           )}
           <button
             type="button"

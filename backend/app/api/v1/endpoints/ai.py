@@ -3,7 +3,7 @@ AI Evaluation Endpoints with Farm-Scoped Authorization
 Enables structured LLM reasoning over detected risks with deterministic SafetyGuard validation.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -102,3 +102,34 @@ async def evaluate_risk_with_ai(
         data=response_data,
         message=f"AI evaluation complete by {agent.agent_type}. Safety policy: {safety_decision.decision.upper()}.",
     )
+
+
+from pydantic import BaseModel
+from app.services.vision_service import VisionService, FarmVisionInspectionResult
+
+class FarmPhotoInspectionRequest(BaseModel):
+    image_base64: str
+    mime_type: Optional[str] = "image/jpeg"
+
+@router.post("/inspect-farm-photo", response_model=APIResponse[FarmVisionInspectionResult], status_code=status.HTTP_200_OK)
+async def inspect_farm_photo_endpoint(
+    payload: FarmPhotoInspectionRequest,
+):
+    """
+    Inspects an uploaded farm photo using Gemini Computer Vision.
+    Validates if the image is a genuine farm/crop/soil photograph.
+    Rejects code screenshots, documents, selfies, and software UIs with actionable reasons.
+    """
+    result = await VisionService.inspect_farm_photo(
+        image_base64=payload.image_base64,
+        mime_type=payload.mime_type or "image/jpeg"
+    )
+    
+    status_msg = "Farm photo verified successfully." if result.is_valid_farm else f"Invalid farm photo: {result.rejection_reason}"
+    
+    return APIResponse(
+        success=result.is_valid_farm,
+        data=result,
+        message=status_msg
+    )
+

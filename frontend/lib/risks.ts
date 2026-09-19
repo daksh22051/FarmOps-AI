@@ -83,9 +83,9 @@ export function formatConfidence(confidence?: number | null): string {
 }
 
 export function resolveZoneName(zoneId?: string | null, zones?: Zone[]): string {
-  if (!zoneId) return "Farm-wide";
+  if (!zoneId) return "Farm-level";
   if (!zones || zones.length === 0) return "Zone unavailable";
-  const matched = zones.find((z) => z.id === zoneId);
+  const matched = zones.find((z) => z.id === zoneId || (z.name && z.name.toLowerCase() === zoneId.toLowerCase()));
   return matched ? matched.name : "Zone unavailable";
 }
 

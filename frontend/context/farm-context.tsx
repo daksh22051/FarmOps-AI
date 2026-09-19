@@ -10,12 +10,15 @@ import {
   getDevices,
   getTelemetryEvents,
   getAlerts,
+  getRisks,
+  getTasks,
 } from "../lib/api/farmops";
 import { getCurrentSession, signOut as authSignOut } from "../lib/auth/session";
 import { createClient } from "../lib/supabase/client";
 import { ApiClientError } from "../lib/api/client";
-import type { Farm, Zone, ZoneUpdate, UserProfile, Device, SensorEventResponse } from "../types/api";
+import type { Farm, Zone, ZoneUpdate, UserProfile, Device, SensorEventResponse, RiskAssessment, Task as BackendTask, Alert as BackendAlert } from "../types/api";
 import { extractLatestMeasurements, type LatestMeasurement } from "../lib/telemetry";
+import { resolveZoneName } from "../lib/risks";
 
 // ==========================================
 // DOMAIN TYPES
@@ -414,6 +417,9 @@ export interface FarmContextType {
   devices: Device[];
   telemetryEvents: SensorEventResponse[];
   latestTelemetry: Record<string, LatestMeasurement>;
+  backendRisks: RiskAssessment[];
+  backendTasks: BackendTask[];
+  backendAlerts: BackendAlert[];
   isLoadingFarms: boolean;
   isLoadingFarm: boolean;
   isLoadingZones: boolean;
@@ -438,6 +444,7 @@ export interface FarmContextType {
   totalAreaHa: number;
   activeZoneCount: number;
   unreadAlertCount: number;
+  backendUnreadAlertCount: number;
   
   // Farm Actions
   updateProfile: (name: string, district: string, primarySoil: string) => void;
@@ -510,6 +517,9 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
   const [devices, setDevices] = useState<Device[]>([]);
   const [telemetryEvents, setTelemetryEvents] = useState<SensorEventResponse[]>([]);
   const [latestTelemetry, setLatestTelemetry] = useState<Record<string, LatestMeasurement>>({});
+  const [backendRisks, setBackendRisks] = useState<RiskAssessment[]>([]);
+  const [backendTasks, setBackendTasks] = useState<BackendTask[]>([]);
+  const [backendAlerts, setBackendAlerts] = useState<BackendAlert[]>([]);
   const [backendUnreadAlertCount, setBackendUnreadAlertCount] = useState<number>(0);
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
   const [isLoadingTelemetry, setIsLoadingTelemetry] = useState(false);
@@ -573,6 +583,9 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     setDevices([]);
     setTelemetryEvents([]);
     setLatestTelemetry({});
+    setBackendRisks([]);
+    setBackendTasks([]);
+    setBackendAlerts([]);
     setBackendUnreadAlertCount(0);
     setDevicesError(null);
     setTelemetryError(null);
@@ -584,12 +597,14 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     setIsLoadingTelemetry(true);
 
     try {
-      const [farmRes, zonesRes, devicesRes, telemetryRes, alertsRes] = await Promise.allSettled([
+      const [farmRes, zonesRes, devicesRes, telemetryRes, alertsRes, risksRes, tasksRes] = await Promise.allSettled([
         getFarm(farmId),
         getZones(farmId),
         getDevices(farmId),
         getTelemetryEvents(farmId, { limit: 100 }),
         getAlerts(farmId, { acknowledged: false }),
+        getRisks(farmId),
+        getTasks(farmId),
       ]);
 
       // Guard against race conditions: discard if user switched to another farm in the interim
@@ -624,8 +639,18 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         setTelemetryError(err instanceof Error ? err : new Error("Failed to load farm telemetry"));
       }
 
-      if (alertsRes.status === "fulfilled" && alertsRes.value.data) {
+      if (alertsRes.status === "fulfilled" && Array.isArray(alertsRes.value.data)) {
+        setBackendAlerts(alertsRes.value.data);
         setBackendUnreadAlertCount(alertsRes.value.data.length);
+      }
+
+      if (risksRes.status === "fulfilled" && Array.isArray(risksRes.value.data)) {
+        // Enforce strict farm scoping
+        setBackendRisks(risksRes.value.data.filter((r) => r.farm_id === farmId));
+      }
+
+      if (tasksRes.status === "fulfilled" && Array.isArray(tasksRes.value.data)) {
+        setBackendTasks(tasksRes.value.data);
       }
     } catch (err: unknown) {
       if (activeFarmRequestIdRef.current !== farmId) return;
@@ -662,6 +687,10 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         setDevices([]);
         setTelemetryEvents([]);
         setLatestTelemetry({});
+        setBackendRisks([]);
+        setBackendTasks([]);
+        setBackendAlerts([]);
+        setBackendUnreadAlertCount(0);
         setIsLoadingFarms(false);
         return;
       }
@@ -672,14 +701,25 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
           console.warn("GET /auth/me error:", err);
           return null;
         }),
-        getFarms(),
+        getFarms().catch((err: unknown) => {
+          console.warn("GET /farms error (backend unreachable):", err);
+          return { data: [] };
+        }),
       ]);
 
       if (userRes && userRes.data) {
         setCurrentUser(userRes.data);
+      } else if (session?.user) {
+        setCurrentUser({
+          id: session.user.id,
+          email: session.user.email,
+          role: (session.user.user_metadata?.role as string) || "operator",
+          user_metadata: session.user.user_metadata || {},
+          app_metadata: session.user.app_metadata || {},
+        });
       }
 
-      const farms = farmsRes.data || [];
+      const farms = farmsRes?.data || [];
       setBackendFarms(farms);
 
       if (farms.length > 0) {
@@ -694,6 +734,10 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         setDevices([]);
         setTelemetryEvents([]);
         setLatestTelemetry({});
+        setBackendRisks([]);
+        setBackendTasks([]);
+        setBackendAlerts([]);
+        setBackendUnreadAlertCount(0);
       }
     } catch (err: unknown) {
       console.error("Error loading backend farms:", err);
@@ -811,6 +855,9 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     setDevices([]);
     setTelemetryEvents([]);
     setLatestTelemetry({});
+    setBackendRisks([]);
+    setBackendTasks([]);
+    setBackendAlerts([]);
     setBackendUnreadAlertCount(0);
     setDevicesError(null);
     setTelemetryError(null);
@@ -828,6 +875,15 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     const supabase = createClient();
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        if (session?.user) {
+          setCurrentUser({
+            id: session.user.id,
+            email: session.user.email,
+            role: (session.user.user_metadata?.role as string) || "operator",
+            user_metadata: session.user.user_metadata || {},
+            app_metadata: session.user.app_metadata || {},
+          });
+        }
         if (session?.access_token) {
           await loadFarms();
         }
@@ -840,6 +896,9 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         setDevices([]);
         setTelemetryEvents([]);
         setLatestTelemetry({});
+        setBackendRisks([]);
+        setBackendTasks([]);
+        setBackendAlerts([]);
         setBackendUnreadAlertCount(0);
       }
     });
@@ -902,13 +961,54 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     if (selectedFarmId) {
       return backendUnreadAlertCount;
     }
+    if (currentUser) {
+      return 0;
+    }
     return alerts.filter((a) => {
       if (a.read) return false;
       if (!settings.alertDatasetAudits && a.category === "Dataset Provenance") return false;
       if (!settings.alertHardwareStatus && a.category === "Hardware Telemetry") return false;
       return true;
     }).length;
-  }, [selectedFarmId, backendUnreadAlertCount, alerts, settings.alertDatasetAudits, settings.alertHardwareStatus]);
+  }, [selectedFarmId, backendUnreadAlertCount, currentUser, alerts, settings.alertDatasetAudits, settings.alertHardwareStatus]);
+
+  const effectiveTasks: FarmTask[] = useMemo(() => {
+    if (currentUser) {
+      return backendTasks.map((bt) => ({
+        id: bt.id,
+        title: bt.title || "Field Task",
+        parcel: bt.zone_id ? resolveZoneName(bt.zone_id, backendZones) : "Farm-level",
+        crop: "Operational Crop",
+        stage: bt.status === "completed" ? ("Completed" as const) : bt.status === "in_progress" ? ("In Progress" as const) : bt.status === "assigned" ? ("Confirmed" as const) : ("Suggested" as const),
+        priority: (bt.priority === "urgent" || bt.priority === "high") ? ("High" as const) : bt.priority === "low" ? ("Low" as const) : ("Medium" as const),
+        dueDate: bt.due_until ? bt.due_until.slice(0, 10) : "",
+        assignee: bt.assignee_id || "Field Operator",
+        sourceOrigin: bt.source || "Operational Plan",
+        checklist: Array.isArray(bt.checklist) ? bt.checklist.map((c: Record<string, unknown>) => ({ text: String(c?.text || c?.title || c), done: Boolean(c?.done) })) : [],
+        notes: bt.notes || "",
+        completedAt: bt.completed_at || undefined,
+      }));
+    }
+    return tasks;
+  }, [currentUser, backendTasks, backendZones, tasks]);
+
+  const effectiveAlerts: SystemAlert[] = useMemo(() => {
+    if (currentUser) {
+      return backendAlerts.map((ba) => ({
+        id: ba.id,
+        title: ba.message || "System Alert",
+        category: "Hardware Telemetry" as const,
+        severity: ba.severity === "critical" ? ("high" as const) : ba.severity === "warning" ? ("medium" as const) : ("info" as const),
+        timestamp: ba.created_at,
+        sourceRef: ba.zone_id ? resolveZoneName(ba.zone_id, backendZones) : "Farm-level",
+        description: ba.message,
+        evidenceNote: `Dedupe: ${ba.dedupe_key}`,
+        read: Boolean(ba.acknowledged_at),
+        isActionable: !ba.acknowledged_at,
+      }));
+    }
+    return alerts;
+  }, [currentUser, backendAlerts, backendZones, alerts]);
 
   // Logging helper
   const logSessionEvent = (
@@ -1410,9 +1510,9 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         isHydrated,
         farm: effectiveFarm,
         settings,
-        advisories,
-        tasks,
-        alerts,
+        advisories: currentUser && backendFarms.length === 0 ? [] : advisories,
+        tasks: effectiveTasks,
+        alerts: effectiveAlerts,
         timeline,
         currentUser,
         backendFarms,
@@ -1422,6 +1522,9 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         devices,
         telemetryEvents,
         latestTelemetry,
+        backendRisks,
+        backendTasks,
+        backendAlerts,
         isLoadingFarms,
         isLoadingFarm,
         isLoadingZones,
@@ -1442,6 +1545,7 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         totalAreaHa,
         activeZoneCount,
         unreadAlertCount,
+        backendUnreadAlertCount,
         updateProfile,
         addZone,
         updateZone,

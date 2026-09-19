@@ -13,6 +13,25 @@ from app.api.v1.router import api_v1_router
 from app.mqtt.client import mqtt_worker
 from app.core.exceptions import FarmOpsException
 from app.core.logging import logger
+import sys
+import socket
+
+# Windows asyncio workaround: silence WinError 10054 when browser closes connection / refreshes page
+if sys.platform == "win32":
+    try:
+        from asyncio.proactor_events import _ProactorBasePipeTransport
+
+        _orig_call_connection_lost = _ProactorBasePipeTransport._call_connection_lost
+
+        def _silenced_call_connection_lost(self, exc):
+            try:
+                _orig_call_connection_lost(self, exc)
+            except (ConnectionResetError, OSError):
+                pass
+
+        _ProactorBasePipeTransport._call_connection_lost = _silenced_call_connection_lost
+    except Exception:
+        pass
 
 
 @asynccontextmanager

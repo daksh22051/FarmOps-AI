@@ -33,6 +33,8 @@ import type {
   AIEvaluationRequest,
   AIEvaluationResponse,
   DemoScenario,
+  FarmVisionInspectionResult,
+  FarmPhotoInspectionRequest,
 } from "../../types/api";
 
 // ==========================================
@@ -194,6 +196,18 @@ export async function evaluateRiskWithAI(
   options?: RequestOptions
 ): Promise<APIResponse<AIEvaluationResponse>> {
   return apiClient.post<AIEvaluationResponse>("/ai/evaluate-risk", data, options);
+}
+
+export async function inspectFarmPhoto(
+  imageBase64: string,
+  mimeType: string = "image/jpeg",
+  options?: RequestOptions
+): Promise<APIResponse<FarmVisionInspectionResult>> {
+  return apiClient.post<FarmVisionInspectionResult>(
+    "/ai/inspect-farm-photo",
+    { image_base64: imageBase64, mime_type: mimeType },
+    options
+  );
 }
 
 // ==========================================

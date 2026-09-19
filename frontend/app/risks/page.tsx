@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
 import { AppShell } from "../../components/app-shell";
 import { Card } from "../../components/ui";
@@ -75,23 +75,36 @@ export default function RiskCenterPage() {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
-  // Load risks whenever selected farm changes
+  // Sequence ref to prevent race conditions when switching farms
+  const activeRiskRequestIdRef = useRef<string | null>(null);
+
+  // Load risks whenever selected farm changes - strictly farm scoped
   const loadRisks = useCallback(async (farmId: string) => {
+    activeRiskRequestIdRef.current = farmId;
     setIsLoadingRisks(true);
     setRisksError(null);
     try {
       const res = await getRisks(farmId);
+      // Discard response if farm changed during fetch
+      if (activeRiskRequestIdRef.current !== farmId) return;
+
       if (res.data && Array.isArray(res.data)) {
-        setRisks(res.data);
+        // Enforce strict farm scoping: never display a risk belonging to another farm
+        const farmScoped = res.data.filter((r) => r.farm_id === farmId);
+        setRisks(farmScoped);
       } else {
         setRisks([]);
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to load risk assessments from backend.";
+      if (activeRiskRequestIdRef.current !== farmId) return;
+      console.warn("Failed to load risks for farm:", err);
+      const msg = err instanceof Error ? err.message : "Failed to load farm risks.";
       setRisksError(msg);
       setRisks([]);
     } finally {
-      setIsLoadingRisks(false);
+      if (activeRiskRequestIdRef.current === farmId) {
+        setIsLoadingRisks(false);
+      }
     }
   }, []);
 

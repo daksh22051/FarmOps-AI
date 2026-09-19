@@ -466,6 +466,23 @@ export interface AIEvaluationResponse {
   safety: AISafetyDecision;
 }
 
+export interface FarmPhotoInspectionRequest {
+  image_base64: string;
+  mime_type?: string;
+}
+
+export interface FarmVisionInspectionResult {
+  is_valid_farm: boolean;
+  category: string;
+  confidence: number;
+  rejection_reason?: string | null;
+  detected_crop?: string | null;
+  vegetation_health?: string | null;
+  soil_condition?: string | null;
+  canopy_cover_pct?: number | null;
+  agronomic_advice?: string | null;
+}
+
 // ==========================================
 // 9. ACTION PLANS & HUMAN APPROVALS
 // ==========================================

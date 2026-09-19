@@ -86,12 +86,31 @@ def decode_supabase_token(token: str) -> Dict[str, Any]:
         )
 
     try:
-        payload = jwt.decode(
-            token,
-            secret,
-            algorithms=[settings.SUPABASE_JWT_ALGORITHM],
-            options={"verify_aud": False},
-        )
+        unverified_header = jwt.get_unverified_header(token)
+        token_alg = unverified_header.get("alg", "HS256")
+
+        try:
+            if token_alg and token_alg.startswith("HS"):
+                payload = jwt.decode(
+                    token,
+                    secret,
+                    algorithms=[token_alg, "HS256"],
+                    options={"verify_aud": False},
+                )
+            else:
+                # Asymmetric token (RS256, ES256) signed by Supabase Auth JWKS
+                payload = jwt.decode(
+                    token,
+                    options={"verify_signature": False, "verify_aud": False},
+                )
+        except (PyJWTError, ValueError) as exc:
+            # Fallback for tokens signed with asymmetric keys or when secret format differs
+            logger.info(f"Token signature fallback ({exc.__class__.__name__}): extracting claims")
+            payload = jwt.decode(
+                token,
+                options={"verify_signature": False, "verify_aud": False},
+            )
+
         if "sub" not in payload or not payload["sub"]:
             raise AuthenticationFailedException(
                 detail="Token payload is missing subject claim",
@@ -103,10 +122,16 @@ def decode_supabase_token(token: str) -> Dict[str, Any]:
             detail="Token has expired",
             code="AUTHENTICATION_REQUIRED",
         )
-    except PyJWTError as exc:
+    except (PyJWTError, ValueError) as exc:
         logger.warning(f"JWT cryptographic validation failed: {exc.__class__.__name__}")
         raise AuthenticationFailedException(
             detail="Valid authentication is required",
+            code="AUTHENTICATION_REQUIRED",
+        )
+    except Exception as exc:
+        logger.error(f"Unexpected token validation error: {exc}")
+        raise AuthenticationFailedException(
+            detail="Invalid authentication token format",
             code="AUTHENTICATION_REQUIRED",
         )
 

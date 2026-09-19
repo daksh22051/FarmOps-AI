@@ -1,5 +1,5 @@
 """
-Sensor Event Telemetry Ingestion and Time-Series Query Endpoints
+Sensor Event Telemetry Ingestion and Time-Series Query Endpoints with Farm-Scoped Authorization
 """
 
 from typing import List, Optional
@@ -7,7 +7,12 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.core.security import get_optional_current_user, AuthUser
+from app.core.security import (
+    get_current_user,
+    get_optional_current_user,
+    AuthUser,
+    check_farm_access,
+)
 from app.services.sensor_event_service import SensorEventService
 from app.schemas.sensor_event import (
     SensorEventIngest,
@@ -29,7 +34,11 @@ async def ingest_sensor_event(
 ):
     """
     Ingests a single sensor telemetry event with sequence deduplication guarantees.
+    Validates farm access when authenticated user token is provided.
     """
+    if user:
+        await check_farm_access(db, farm_id=farm_id, user=user)
+
     event = await SensorEventService.ingest_event(db, farm_id=farm_id, payload=payload)
     return APIResponse(
         success=True,
@@ -47,7 +56,11 @@ async def ingest_sensor_events_batch(
 ):
     """
     Ingests a batch of sensor telemetry events from edge gateways.
+    Validates farm access when authenticated user token is provided.
     """
+    if user:
+        await check_farm_access(db, farm_id=farm_id, user=user)
+
     events = await SensorEventService.ingest_batch(db, farm_id=farm_id, events=payload.events)
     return APIResponse(
         success=True,
@@ -66,10 +79,14 @@ async def query_sensor_events(
     end_time: Optional[datetime] = Query(None, description="End time UTC"),
     limit: int = Query(100, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
     """
-    Queries time-series sensor events for a farm with optional zone, device, and metric filters.
+    Queries time-series sensor events for a farm.
+    Enforces strict farm-scoped authorization to protect cross-farm telemetry data.
     """
+    await check_farm_access(db, farm_id=farm_id, user=user)
+
     filter_params = SensorEventFilter(
         farm_id=farm_id,
         zone_id=zone_id,

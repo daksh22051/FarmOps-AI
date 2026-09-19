@@ -1,12 +1,17 @@
 """
-Operational Alerts Endpoints
+Operational Alerts Endpoints with Farm-Scoped Authorization
 """
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.core.security import get_current_user, AuthUser
+from app.core.security import (
+    get_current_user,
+    AuthUser,
+    check_farm_access,
+    verify_alert_access,
+)
 from app.services.alert_service import AlertService
 from app.schemas.alert import AlertResponse, AlertAcknowledgeRequest
 from app.schemas.common import APIResponse
@@ -24,6 +29,8 @@ async def list_alerts(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
+    """Lists alerts for a farm. Verifies caller has access to the farm."""
+    await check_farm_access(db, farm_id=farm_id, user=user)
     alerts = await AlertService.get_alerts(
         db, farm_id=farm_id, zone_id=zone_id, severity=severity, acknowledged=acknowledged, limit=limit
     )
@@ -37,5 +44,16 @@ async def acknowledge_alert(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    alert = await AlertService.acknowledge_alert(db, alert_id=alert_id, actor_id=user.id)
-    return APIResponse(success=True, data=AlertResponse.model_validate(alert), message="Alert acknowledged")
+    """
+    Acknowledges an active operational alert.
+    Requires owner, manager, operator, or agronomist role on the owning farm.
+    """
+    alert = await verify_alert_access(alert_id=alert_id, db=db, user=user)
+    await check_farm_access(
+        db,
+        farm_id=alert.farm_id,
+        user=user,
+        allowed_roles=["owner", "manager", "operator", "agronomist"],
+    )
+    acknowledged = await AlertService.acknowledge_alert(db, alert_id=alert_id, actor_id=user.id)
+    return APIResponse(success=True, data=AlertResponse.model_validate(acknowledged), message="Alert acknowledged")

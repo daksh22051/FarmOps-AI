@@ -1,12 +1,17 @@
 """
-Action Plans & Human Review Endpoints
+Action Plans & Human Review Endpoints with Farm-Scoped Authorization
 """
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.core.security import get_current_user, AuthUser
+from app.core.security import (
+    get_current_user,
+    AuthUser,
+    check_farm_access,
+    verify_plan_access,
+)
 from app.services.plan_service import PlanService
 from app.schemas.plan import ActionPlanResponse, ActionPlanApprovalRequest
 from app.schemas.common import APIResponse
@@ -24,6 +29,8 @@ async def list_plans(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
+    """Lists action plans for a farm. Enforces farm-scoped authorization."""
+    await check_farm_access(db, farm_id=farm_id, user=user)
     plans = await PlanService.get_plans(
         db, farm_id=farm_id, zone_id=zone_id, policy_decision=policy_decision, approval_state=approval_state, limit=limit
     )
@@ -36,7 +43,8 @@ async def get_plan_detail(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    plan = await PlanService.get_plan(db, plan_id=plan_id)
+    """Retrieves action plan details. Verifies user has access to the owning farm."""
+    plan = await verify_plan_access(plan_id=plan_id, db=db, user=user)
     return APIResponse(success=True, data=ActionPlanResponse.model_validate(plan))
 
 
@@ -48,9 +56,18 @@ async def review_action_plan(
     user: AuthUser = Depends(get_current_user),
 ):
     """
-    Human-in-the-loop review endpoint. Approving a plan automatically instantiates a Task.
+    Human-in-the-loop review endpoint.
+    Requires owner, manager, or agronomist role on the owning farm.
     """
-    plan = await PlanService.review_plan(
+    plan = await verify_plan_access(plan_id=plan_id, db=db, user=user)
+    await check_farm_access(
+        db,
+        farm_id=plan.farm_id,
+        user=user,
+        allowed_roles=["owner", "manager", "agronomist"],
+    )
+
+    reviewed = await PlanService.review_plan(
         session=db,
         plan_id=plan_id,
         reviewer_id=user.id,
@@ -58,6 +75,6 @@ async def review_action_plan(
     )
     return APIResponse(
         success=True,
-        data=ActionPlanResponse.model_validate(plan),
+        data=ActionPlanResponse.model_validate(reviewed),
         message=f"Plan status updated to '{payload.decision}'.",
     )

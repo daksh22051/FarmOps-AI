@@ -60,9 +60,18 @@ app.add_middleware(
 # Custom domain exception handler
 @app.exception_handler(FarmOpsException)
 async def farmops_exception_handler(request: Request, exc: FarmOpsException):
+    error_code = getattr(exc, "code", "ERROR")
     return JSONResponse(
         status_code=exc.status_code,
-        content={"success": False, "message": exc.detail, "data": None},
+        content={
+            "success": False,
+            "message": exc.detail,
+            "data": None,
+            "error": {
+                "code": error_code,
+                "message": exc.detail,
+            },
+        },
         headers=exc.headers,
     )
 
@@ -73,7 +82,15 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception(f"Unhandled error on {request.method} {request.url.path}: {exc}")
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"success": False, "message": "An unexpected server error occurred.", "data": None},
+        content={
+            "success": False,
+            "message": "An unexpected server error occurred.",
+            "data": None,
+            "error": {
+                "code": "INTERNAL_SERVER_ERROR",
+                "message": "An unexpected server error occurred.",
+            },
+        },
     )
 
 

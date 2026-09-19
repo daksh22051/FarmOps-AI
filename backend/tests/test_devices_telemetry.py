@@ -61,7 +61,7 @@ async def test_device_and_sensor_event_deduplication(client: AsyncClient, auth_h
     assert ingest_2.json()["data"]["sequence"] == 2
 
     # 6. Query Events
-    query_res = await client.get(f"/api/v1/telemetry/{farm_id}/events?device_id={device_id}")
+    query_res = await client.get(f"/api/v1/telemetry/{farm_id}/events?device_id={device_id}", headers=auth_headers)
     assert query_res.status_code == 200
     events = query_res.json()["data"]
     assert len(events) == 2  # Exactly 2 distinct sequence events

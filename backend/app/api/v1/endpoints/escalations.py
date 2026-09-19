@@ -1,12 +1,17 @@
 """
-Escalation & Expert Review Endpoints
+Escalation & Expert Review Endpoints with Farm-Scoped Authorization
 """
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.core.security import get_current_user, AuthUser
+from app.core.security import (
+    get_current_user,
+    AuthUser,
+    check_farm_access,
+    verify_escalation_access,
+)
 from app.services.escalation_service import EscalationService
 from app.schemas.escalation import EscalationCreate, EscalationReviewRequest, EscalationResponse
 from app.schemas.common import APIResponse
@@ -20,6 +25,8 @@ async def create_escalation(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
+    """Opens an escalation for expert agronomist review. Verifies farm access."""
+    await check_farm_access(db, farm_id=payload.farm_id, user=user)
     esc = await EscalationService.create_escalation(db, data=payload)
     return APIResponse(success=True, data=EscalationResponse.model_validate(esc), message="Escalation opened")
 
@@ -32,6 +39,8 @@ async def list_escalations(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
+    """Lists escalations for a farm. Verifies farm membership."""
+    await check_farm_access(db, farm_id=farm_id, user=user)
     escalations = await EscalationService.get_escalations(db, farm_id=farm_id, status=status, limit=limit)
     return APIResponse(success=True, data=[EscalationResponse.model_validate(e) for e in escalations])
 
@@ -43,5 +52,18 @@ async def submit_escalation_review(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    esc = await EscalationService.review_escalation(db, escalation_id=escalation_id, reviewer_id=user.id, data=payload)
-    return APIResponse(success=True, data=EscalationResponse.model_validate(esc), message="Escalation review recorded")
+    """
+    Submits expert agronomist review for an escalation.
+    Requires agronomist, manager, or owner role.
+    """
+    esc = await verify_escalation_access(escalation_id=escalation_id, db=db, user=user)
+    await check_farm_access(
+        db,
+        farm_id=esc.farm_id,
+        user=user,
+        allowed_roles=["agronomist", "manager", "owner"],
+    )
+    reviewed = await EscalationService.review_escalation(
+        db, escalation_id=escalation_id, reviewer_id=user.id, data=payload
+    )
+    return APIResponse(success=True, data=EscalationResponse.model_validate(reviewed), message="Escalation review recorded")

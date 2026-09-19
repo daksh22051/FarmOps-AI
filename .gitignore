@@ -1,0 +1,28 @@
+﻿# Dependencies and build outputs
+node_modules/
+.next/
+out/
+build/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Local environment files
+.env*
+!.env.example
+
+# TypeScript, caches, and local tooling state
+*.tsbuildinfo
+.DS_Store
+.kilo/
+.kaggle/
+kaggle.json
+
+# Local research datasets and generated artifacts
+data/raw/
+data/processed/
+data/generated/
+data/cache/
+public/datasets/
+frontend/public/datasets/

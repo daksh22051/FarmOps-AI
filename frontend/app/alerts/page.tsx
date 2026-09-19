@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 
 export default function AlertsPage() {
-  const { selectedFarmId, selectedFarm, backendZones } = useFarm();
+  const { selectedFarmId, selectedFarm, backendZones, refreshAlertCount } = useFarm();
 
   // Tab State: Alerts vs Escalations
   const [activeTab, setActiveTab] = useState<"alerts" | "escalations">("alerts");
@@ -158,7 +158,9 @@ export default function AlertsPage() {
           text: `Alert ${alertId.slice(0, 10)} acknowledged successfully.`,
           type: "success",
         });
-        if (selectedFarmId) await loadAlerts(selectedFarmId);
+        if (selectedFarmId) {
+          await Promise.all([loadAlerts(selectedFarmId), refreshAlertCount()]);
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Error acknowledging alert.";

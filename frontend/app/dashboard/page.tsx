@@ -1,18 +1,11 @@
-import type { LucideIcon } from "lucide-react";
-import {
-  BellRing,
-  CheckCircle2,
-  ClipboardCheck,
-  Database,
-  ShieldAlert,
-} from "lucide-react";
+import { Database } from "lucide-react";
 import { AppShell } from "../../components/app-shell";
-import { Card } from "../../components/ui";
 import { getDashboardDatasetBundle } from "../../lib/data/server";
 import { DatasetExplorer } from "./dataset-explorer";
 import { FarmOverviewCard } from "./farm-overview-card";
 import { TelemetryOverview } from "./telemetry-overview";
 import { RecentActivity } from "./recent-activity";
+import { DashboardOverviewCards } from "./dashboard-overview-cards";
 
 export default async function DashboardPage() {
   const bundle = await getDashboardDatasetBundle();
@@ -57,28 +50,8 @@ export default async function DashboardPage() {
         </div>
       </section>
 
-      <div className="mt-8 grid gap-5 xl:grid-cols-2">
-        <OverviewSection
-          icon={ShieldAlert}
-          title="Risks & advisory"
-          description="No verified risk assessments or advisory plans are available."
-          detail="Recommendations will appear only after a trusted farm data source and assessment workflow are connected."
-        />
-        <div className="grid gap-5 sm:grid-cols-2">
-          <OverviewSection
-            icon={ClipboardCheck}
-            title="Tasks"
-            description="No task records available."
-            detail="Approved follow-up work will be summarized here."
-          />
-          <OverviewSection
-            icon={BellRing}
-            title="Alerts"
-            description="No alert records available."
-            detail="Meaningful notices will appear when alert rules are connected."
-          />
-        </div>
-      </div>
+      {/* Operational Command Center (Connected to real backend risks, plans, tasks, alerts) */}
+      <DashboardOverviewCards />
 
       <section className="mt-8" aria-labelledby="activity-heading">
         <SectionHeading id="activity-heading" title="Recent activity" description="Farm decisions, work, and reassessments" />
@@ -96,39 +69,5 @@ function SectionHeading({ id, title, description }: { id: string; title: string;
       </h2>
       <p className="mt-1 text-sm text-slate-500">{description}</p>
     </div>
-  );
-}
-
-
-function OverviewSection({
-  icon: Icon,
-  title,
-  description,
-  detail,
-}: {
-  icon: LucideIcon;
-  title: string;
-  description: string;
-  detail: string;
-}) {
-  return (
-    <Card className="min-h-52">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-forest-50 text-forest-700">
-            <Icon aria-hidden="true" size={18} />
-          </span>
-          <h2 className="font-semibold text-ink">{title}</h2>
-        </div>
-        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">Empty</span>
-      </div>
-      <div className="mt-6 flex gap-3">
-        <CheckCircle2 aria-hidden="true" size={18} className="mt-0.5 shrink-0 text-slate-300" />
-        <div>
-          <p className="text-sm font-medium text-slate-700">{description}</p>
-          <p className="mt-1.5 text-xs leading-5 text-slate-500">{detail}</p>
-        </div>
-      </div>
-    </Card>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import {
   getCurrentUser as apiGetCurrentUser,
   getFarms,
@@ -9,6 +9,7 @@ import {
   updateZone as apiUpdateZone,
   getDevices,
   getTelemetryEvents,
+  getAlerts,
 } from "../lib/api/farmops";
 import { getCurrentSession, signOut as authSignOut } from "../lib/auth/session";
 import { createClient } from "../lib/supabase/client";
@@ -429,6 +430,7 @@ export interface FarmContextType {
   refreshZones: () => Promise<void>;
   refreshDevices: () => Promise<void>;
   refreshTelemetry: () => Promise<void>;
+  refreshAlertCount: () => Promise<void>;
   updateBackendZone: (zoneId: string, data: ZoneUpdate) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   
@@ -508,10 +510,14 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
   const [devices, setDevices] = useState<Device[]>([]);
   const [telemetryEvents, setTelemetryEvents] = useState<SensorEventResponse[]>([]);
   const [latestTelemetry, setLatestTelemetry] = useState<Record<string, LatestMeasurement>>({});
+  const [backendUnreadAlertCount, setBackendUnreadAlertCount] = useState<number>(0);
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
   const [isLoadingTelemetry, setIsLoadingTelemetry] = useState(false);
   const [devicesError, setDevicesError] = useState<ApiClientError | Error | null>(null);
   const [telemetryError, setTelemetryError] = useState<ApiClientError | Error | null>(null);
+
+  // Sequence ref to prevent race conditions when switching farms rapidly
+  const activeFarmRequestIdRef = useRef<string | null>(null);
 
   // Load from localStorage on client mount
   useEffect(() => {
@@ -555,15 +561,19 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
 
   // Select a specific farm and load its details, zones, devices, and telemetry
   const selectFarm = useCallback(async (farmId: string) => {
+    activeFarmRequestIdRef.current = farmId;
     setSelectedFarmId(farmId);
     try {
       localStorage.setItem(SELECTED_FARM_STORAGE_KEY, farmId);
     } catch {}
 
-    // 1. Immediately clear stale telemetry and device state to prevent cross-farm data bleeding
+    // 1. Immediately clear stale farm, zones, telemetry, and device state to prevent cross-farm data bleeding
+    setSelectedFarm(null);
+    setBackendZones([]);
     setDevices([]);
     setTelemetryEvents([]);
     setLatestTelemetry({});
+    setBackendUnreadAlertCount(0);
     setDevicesError(null);
     setTelemetryError(null);
     setFarmError(null);
@@ -574,12 +584,18 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     setIsLoadingTelemetry(true);
 
     try {
-      const [farmRes, zonesRes, devicesRes, telemetryRes] = await Promise.allSettled([
+      const [farmRes, zonesRes, devicesRes, telemetryRes, alertsRes] = await Promise.allSettled([
         getFarm(farmId),
         getZones(farmId),
         getDevices(farmId),
         getTelemetryEvents(farmId, { limit: 100 }),
+        getAlerts(farmId, { acknowledged: false }),
       ]);
+
+      // Guard against race conditions: discard if user switched to another farm in the interim
+      if (activeFarmRequestIdRef.current !== farmId) {
+        return;
+      }
 
       if (farmRes.status === "fulfilled" && farmRes.value.data) {
         setSelectedFarm(farmRes.value.data);
@@ -607,7 +623,12 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         const err = telemetryRes.reason;
         setTelemetryError(err instanceof Error ? err : new Error("Failed to load farm telemetry"));
       }
+
+      if (alertsRes.status === "fulfilled" && alertsRes.value.data) {
+        setBackendUnreadAlertCount(alertsRes.value.data.length);
+      }
     } catch (err: unknown) {
+      if (activeFarmRequestIdRef.current !== farmId) return;
       console.error("Failed to select farm:", err);
       if (err instanceof ApiClientError) {
         setFarmError(err);
@@ -615,10 +636,12 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         setFarmError(err instanceof Error ? err : new Error("Failed to load farm details"));
       }
     } finally {
-      setIsLoadingFarm(false);
-      setIsLoadingZones(false);
-      setIsLoadingDevices(false);
-      setIsLoadingTelemetry(false);
+      if (activeFarmRequestIdRef.current === farmId) {
+        setIsLoadingFarm(false);
+        setIsLoadingZones(false);
+        setIsLoadingDevices(false);
+        setIsLoadingTelemetry(false);
+      }
     }
   }, []);
 
@@ -750,6 +773,18 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     }
   }, [selectedFarmId]);
 
+  const refreshAlertCount = useCallback(async () => {
+    if (!selectedFarmId) return;
+    try {
+      const res = await getAlerts(selectedFarmId, { acknowledged: false });
+      if (res.data) {
+        setBackendUnreadAlertCount(res.data.length);
+      }
+    } catch (err) {
+      console.warn("Failed to refresh unacknowledged alert count:", err);
+    }
+  }, [selectedFarmId]);
+
   // Update backend zone directly
   const updateBackendZone = useCallback(async (zoneId: string, data: ZoneUpdate): Promise<{ success: boolean; error?: string }> => {
     try {
@@ -776,6 +811,7 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     setDevices([]);
     setTelemetryEvents([]);
     setLatestTelemetry({});
+    setBackendUnreadAlertCount(0);
     setDevicesError(null);
     setTelemetryError(null);
     setFarmError(null);
@@ -804,6 +840,7 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         setDevices([]);
         setTelemetryEvents([]);
         setLatestTelemetry({});
+        setBackendUnreadAlertCount(0);
       }
     });
 
@@ -862,13 +899,16 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
   }, [selectedFarm, backendZones, effectiveFarm.zones]);
 
   const unreadAlertCount = useMemo(() => {
+    if (selectedFarmId) {
+      return backendUnreadAlertCount;
+    }
     return alerts.filter((a) => {
       if (a.read) return false;
       if (!settings.alertDatasetAudits && a.category === "Dataset Provenance") return false;
       if (!settings.alertHardwareStatus && a.category === "Hardware Telemetry") return false;
       return true;
     }).length;
-  }, [alerts, settings.alertDatasetAudits, settings.alertHardwareStatus]);
+  }, [selectedFarmId, backendUnreadAlertCount, alerts, settings.alertDatasetAudits, settings.alertHardwareStatus]);
 
   // Logging helper
   const logSessionEvent = (
@@ -1396,6 +1436,7 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         refreshZones,
         refreshDevices,
         refreshTelemetry,
+        refreshAlertCount,
         updateBackendZone,
         logout,
         totalAreaHa,

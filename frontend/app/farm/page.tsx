@@ -249,7 +249,9 @@ export default function MyFarmPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-bold text-ink sm:text-3xl">{farm.name}</h1>
+            <h1 className="text-2xl font-bold text-ink sm:text-3xl">
+              {selectedFarm ? selectedFarm.name : farm.name}
+            </h1>
 
             {/* Farm Selector if user has multiple backend farms */}
             {backendFarms.length > 1 && (
@@ -274,11 +276,11 @@ export default function MyFarmPage() {
           <div className="mt-1 flex flex-wrap items-center gap-4 text-xs text-slate-600">
             <span className="flex items-center gap-1.5">
               <MapPin size={14} className="text-forest-600" />
-              {farm.district}
+              {selectedFarm?.location || farm.district}
             </span>
             <span className="flex items-center gap-1.5">
               <Layers size={14} className="text-forest-600" />
-              Soil: {farm.primarySoil}
+              Soil: {(selectedFarm?.crop_profile?.primary_soil as string) || farm.primarySoil}
             </span>
             {selectedFarm?.timezone && (
               <span className="text-slate-400">
@@ -468,33 +470,47 @@ export default function MyFarmPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {farm.zones.length === 0 ? (
-              <button
-                type="button"
-                onClick={loadDemoFarm}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[#dfe6dd] bg-white px-3 py-1.5 text-xs font-semibold text-forest-800 hover:bg-slate-50"
-              >
-                <RefreshCw size={13} />
-                Load Demo Parcels
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setShowClearConfirm(true)}
-                className="text-xs text-rose-700 hover:underline"
-              >
-                Clear All Parcels
-              </button>
+            {!selectedFarm && (
+              farm.zones.length === 0 ? (
+                <button
+                  type="button"
+                  onClick={loadDemoFarm}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[#dfe6dd] bg-white px-3 py-1.5 text-xs font-semibold text-forest-800 hover:bg-slate-50"
+                >
+                  <RefreshCw size={13} />
+                  Load Demo Parcels
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowClearConfirm(true)}
+                  className="text-xs text-rose-700 hover:underline"
+                >
+                  Clear All Parcels
+                </button>
+              )
             )}
           </div>
         </div>
 
-        {farm.zones.length === 0 ? (
+        {isLoadingFarm || isLoadingZones ? (
+          <Card className="p-12 text-center">
+            <Loader2 size={32} className="mx-auto text-forest-600 animate-spin" />
+            <h3 className="mt-3 text-sm font-bold text-ink">Loading Field Zones...</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Retrieving authoritative zone configurations from FastAPI backend.
+            </p>
+          </Card>
+        ) : farm.zones.length === 0 ? (
           <Card className="p-12 text-center">
             <Sprout size={36} className="mx-auto text-slate-300" />
-            <h3 className="mt-3 text-sm font-bold text-ink">No Field Zones Configured</h3>
+            <h3 className="mt-3 text-sm font-bold text-ink">
+              {selectedFarm ? "No Field Zones Registered" : "No Field Zones Configured"}
+            </h3>
             <p className="mt-1 text-xs text-slate-500 max-w-md mx-auto">
-              You have cleared all parcel records. Click &quot;Add Field Zone&quot; to define your parcels or restore the standard demo farm.
+              {selectedFarm
+                ? `No field zones are currently registered for "${selectedFarm.name}". You can add management parcels to begin monitoring.`
+                : "You have cleared all parcel records. Click \"Add Field Zone\" to define your parcels or restore the standard demo farm."}
             </p>
             <div className="mt-4 flex items-center justify-center gap-3">
               <button
@@ -505,14 +521,16 @@ export default function MyFarmPage() {
                 <Plus size={14} />
                 Add First Zone
               </button>
-              <button
-                type="button"
-                onClick={loadDemoFarm}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-[#dfe6dd] bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                <RefreshCw size={14} />
-                Restore Demo Data
-              </button>
+              {!selectedFarm && (
+                <button
+                  type="button"
+                  onClick={loadDemoFarm}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#dfe6dd] bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <RefreshCw size={14} />
+                  Restore Demo Data
+                </button>
+              )}
             </div>
           </Card>
         ) : (

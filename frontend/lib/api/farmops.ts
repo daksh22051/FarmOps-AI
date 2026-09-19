@@ -16,7 +16,9 @@ import type {
   ExternalObservation,
   RiskAssessment,
   ActionPlan,
+  ActionPlanCreate,
   Task,
+  TaskCreate,
   TaskUpdate,
   Alert,
   AuditEvent,
@@ -199,13 +201,16 @@ export async function getActionPlans(
   farmId: string,
   params?: {
     status?: string;
+    approval_state?: string;
+    policy_decision?: string;
     zone_id?: string;
+    limit?: number;
     page?: number;
     page_size?: number;
   },
   options?: RequestOptions
-): Promise<APIResponse<PaginatedResponse<ActionPlan>>> {
-  return apiClient.get<PaginatedResponse<ActionPlan>>(`/farms/${farmId}/action-plans`, {
+): Promise<APIResponse<ActionPlan[]>> {
+  return apiClient.get<ActionPlan[]>(`/farms/${farmId}/action-plans`, {
     ...options,
     params: params as Record<string, string | number | boolean | undefined | null>,
   });
@@ -213,6 +218,13 @@ export async function getActionPlans(
 
 export async function getActionPlan(actionPlanId: string, options?: RequestOptions): Promise<APIResponse<ActionPlan>> {
   return apiClient.get<ActionPlan>(`/action-plans/${actionPlanId}`, options);
+}
+
+export async function createActionPlan(
+  data: ActionPlanCreate,
+  options?: RequestOptions
+): Promise<APIResponse<ActionPlan>> {
+  return apiClient.post<ActionPlan>("/action-plans", data, options);
 }
 
 export async function approveActionPlan(
@@ -240,12 +252,13 @@ export async function getTasks(
   params?: {
     status?: string;
     zone_id?: string;
+    limit?: number;
     page?: number;
     page_size?: number;
   },
   options?: RequestOptions
-): Promise<APIResponse<PaginatedResponse<Task>>> {
-  return apiClient.get<PaginatedResponse<Task>>(`/farms/${farmId}/tasks`, {
+): Promise<APIResponse<Task[]>> {
+  return apiClient.get<Task[]>(`/farms/${farmId}/tasks`, {
     ...options,
     params: params as Record<string, string | number | boolean | undefined | null>,
   });
@@ -253,6 +266,17 @@ export async function getTasks(
 
 export async function getTaskDetail(taskId: string, options?: RequestOptions): Promise<APIResponse<Task>> {
   return apiClient.get<Task>(`/tasks/detail/${taskId}`, options);
+}
+
+export async function getTask(taskId: string, options?: RequestOptions): Promise<APIResponse<Task>> {
+  return apiClient.get<Task>(`/tasks/${taskId}`, options);
+}
+
+export async function createTask(
+  data: TaskCreate,
+  options?: RequestOptions
+): Promise<APIResponse<Task>> {
+  return apiClient.post<Task>("/tasks", data, options);
 }
 
 export async function startTask(

@@ -521,6 +521,26 @@ export interface ActionPlan {
   updated_at: string; // ISO-8601
 }
 
+export interface ActionPlanCreate {
+  farm_id?: string | null;
+  zone_id?: string | null;
+  risk_id?: string | null;
+  source_risk_ids?: string[] | null;
+  title?: string | null;
+  objective?: string | null;
+  action_type?: string | null;
+  action_summary?: string | null;
+  priority?: "low" | "medium" | "high" | "urgent" | string;
+  confidence?: number;
+  rationale?: string | null;
+  estimated_cost?: number | null;
+  estimated_duration_minutes?: number | null;
+  steps?: ActionPlanStep[] | null;
+  evidence?: Record<string, unknown> | null;
+  source?: string | null;
+  ai_proposal?: AIProposal | null;
+}
+
 // ==========================================
 // 10. FIELD TASKS & OPERATIONAL LIFECYCLE
 // ==========================================

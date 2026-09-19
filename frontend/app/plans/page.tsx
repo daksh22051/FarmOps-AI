@@ -1,9 +1,22 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { AppShell } from "../../components/app-shell";
 import { Card } from "../../components/ui";
-import { useFarm, type AdvisoryPlan } from "../../context/farm-context";
+import { useFarm } from "../../context/farm-context";
+import type { ActionPlan, ActionPlanStep } from "../../types/api";
+import {
+  getActionPlans,
+  approveActionPlan,
+  rejectActionPlan,
+} from "../../lib/api/farmops";
+import {
+  formatPlanStatus,
+  formatPlanPriority,
+  formatPolicyDecision,
+  resolveZoneName,
+} from "../../lib/plans";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -13,28 +26,26 @@ import {
   RefreshCw,
   X,
   XCircle,
+  ShieldAlert,
+  Clock,
+  ListChecks,
 } from "lucide-react";
 
 export default function AdvisoryPlansPage() {
-  const {
-    advisories,
-    acceptPlan,
-    rejectPlan,
-    reconsiderPlan,
-    resetPlans,
-    settings,
-  } = useFarm();
+  const { selectedFarmId, selectedFarm, backendZones } = useFarm();
 
-  const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
-  const [priorityFilter, setPriorityFilter] = useState<string>("ALL");
+  const [plans, setPlans] = useState<ActionPlan[]>([]);
+  const [isLoadingPlans, setIsLoadingPlans] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [plansError, setPlansError] = useState<string | null>(null);
+
+  // Filters
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [priorityFilter, setPriorityFilter] = useState<string>("ALL");
 
   // Rejection Modal State
-  const [rejectingPlan, setRejectingPlan] = useState<AdvisoryPlan | null>(null);
+  const [rejectingPlan, setRejectingPlan] = useState<ActionPlan | null>(null);
   const [rejectReason, setRejectReason] = useState("");
-
-  // Reset Confirmation State
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   // User Feedback Message
   const [feedbackMessage, setFeedbackMessage] = useState<{
@@ -42,39 +53,147 @@ export default function AdvisoryPlansPage() {
     type: "success" | "error" | "info";
   } | null>(null);
 
-  const filteredAdvisories = advisories.filter((plan) => {
-    if (categoryFilter !== "ALL" && plan.category !== categoryFilter) return false;
-    if (priorityFilter !== "ALL" && plan.priority !== priorityFilter) return false;
-    if (statusFilter !== "ALL" && plan.status !== statusFilter) return false;
+  const loadPlans = useCallback(async (farmId: string) => {
+    setIsLoadingPlans(true);
+    setPlansError(null);
+    try {
+      const res = await getActionPlans(farmId);
+      if (res.error) {
+        setPlansError(res.error.message || "Failed to load action plans.");
+        setPlans([]);
+      } else if (Array.isArray(res.data)) {
+        setPlans(res.data);
+      } else {
+        setPlans([]);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Network error loading action plans.";
+      setPlansError(msg);
+      setPlans([]);
+    } finally {
+      setIsLoadingPlans(false);
+    }
+  }, []);
+
+  // Farm-switching safety: clear plans immediately and reload for selected farm
+  useEffect(() => {
+    if (!selectedFarmId) {
+      setPlans([]);
+      setIsLoadingPlans(false);
+      setPlansError(null);
+      return;
+    }
+    setPlans([]);
+    void loadPlans(selectedFarmId);
+  }, [selectedFarmId, loadPlans]);
+
+  const handleApprove = async (planId: string) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const res = await approveActionPlan(planId);
+      if (res.error) {
+        setFeedbackMessage({
+          text: `Approval failed: ${res.error.message}`,
+          type: "error",
+        });
+      } else {
+        setFeedbackMessage({
+          text: `Action plan approved successfully. An authoritative field task has been scheduled on the Task Board.`,
+          type: "success",
+        });
+        if (selectedFarmId) {
+          await loadPlans(selectedFarmId);
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error approving plan.";
+      setFeedbackMessage({ text: msg, type: "error" });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleConfirmReject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectingPlan || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const res = await rejectActionPlan(rejectingPlan.id, {
+        review_notes: rejectReason.trim() || undefined,
+      });
+      if (res.error) {
+        setFeedbackMessage({
+          text: `Rejection failed: ${res.error.message}`,
+          type: "error",
+        });
+      } else {
+        setFeedbackMessage({
+          text: `Action plan ${rejectingPlan.id} was rejected. No field tasks will be instantiated.`,
+          type: "info",
+        });
+        setRejectingPlan(null);
+        setRejectReason("");
+        if (selectedFarmId) {
+          await loadPlans(selectedFarmId);
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error rejecting plan.";
+      setFeedbackMessage({ text: msg, type: "error" });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const filteredPlans = plans.filter((plan) => {
+    const rawState = (plan.approval_state || plan.status || "").toLowerCase();
+    if (statusFilter !== "ALL") {
+      if (statusFilter === "pending_approval" && !["pending_approval", "draft"].includes(rawState)) {
+        return false;
+      }
+      if (statusFilter === "approved" && rawState !== "approved") {
+        return false;
+      }
+      if (statusFilter === "executing" && !["executing", "in_progress"].includes(rawState)) {
+        return false;
+      }
+      if (statusFilter === "completed" && rawState !== "completed") {
+        return false;
+      }
+      if (statusFilter === "rejected" && rawState !== "rejected") {
+        return false;
+      }
+      if (statusFilter === "cancelled" && rawState !== "cancelled") {
+        return false;
+      }
+    }
+
+    if (priorityFilter !== "ALL") {
+      const p = (plan.priority || "").toLowerCase();
+      if (priorityFilter.toLowerCase() !== p) return false;
+    }
+
     return true;
   });
 
-  const pendingCount = advisories.filter((p) => p.status === "Pending Decision").length;
-  const acceptedCount = advisories.filter((p) => p.status === "Accepted").length;
-  const rejectedCount = advisories.filter((p) => p.status === "Rejected").length;
+  const pendingCount = plans.filter((p) => {
+    const s = (p.approval_state || p.status || "").toLowerCase();
+    return s === "pending_approval" || s === "draft";
+  }).length;
 
-  const handleAccept = (planId: string) => {
-    const res = acceptPlan(planId);
-    if (res.success) {
-      setFeedbackMessage({ text: res.message, type: "success" });
-    } else {
-      setFeedbackMessage({ text: res.message, type: "error" });
-    }
-  };
+  const approvedExecutingCount = plans.filter((p) => {
+    const s = (p.approval_state || p.status || "").toLowerCase();
+    return ["approved", "executing", "completed"].includes(s);
+  }).length;
 
-  const handleConfirmReject = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!rejectingPlan) return;
-    const res = rejectPlan(rejectingPlan.id, rejectReason);
-    setRejectingPlan(null);
-    setRejectReason("");
-    if (res.success) {
-      setFeedbackMessage({ text: res.message, type: "info" });
-    }
-  };
+  const rejectedCancelledCount = plans.filter((p) => {
+    const s = (p.approval_state || p.status || "").toLowerCase();
+    return ["rejected", "cancelled"].includes(s);
+  }).length;
 
   return (
-    <AppShell title="Advisory Plans">
+    <AppShell title="Action Plans">
       {/* Page Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -87,21 +206,24 @@ export default function AdvisoryPlansPage() {
             </span>
           </div>
           <h1 className="text-2xl font-bold text-ink sm:text-3xl">
-            Agronomic Advisory Plans
+            Agronomic Action Plans
           </h1>
           <p className="mt-1 text-sm text-slate-600 max-w-3xl">
-            Review recommendations generated from research dataset benchmarks. Each plan requires your explicit farmer decision (Accept or Reject).
+            Authoritative agronomic action plans generated from verified AI recommendations. Human approval is strictly enforced before any plan can spawn field tasks.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setShowResetConfirm(true)}
-            className="inline-flex items-center gap-2 rounded-xl border border-[#dfe6dd] bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50"
+            disabled={!selectedFarmId || isLoadingPlans}
+            onClick={() => {
+              if (selectedFarmId) void loadPlans(selectedFarmId);
+            }}
+            className="inline-flex items-center gap-2 rounded-xl border border-[#dfe6dd] bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 disabled:opacity-50"
           >
-            <RefreshCw size={14} />
-            Reset Review State
+            <RefreshCw size={14} className={isLoadingPlans ? "animate-spin" : ""} />
+            Refresh Plans
           </button>
         </div>
       </div>
@@ -112,11 +234,11 @@ export default function AdvisoryPlansPage() {
           <Info size={18} className="mt-0.5 shrink-0 text-forest-700" />
           <div className="space-y-1">
             <p className="font-semibold text-forest-900">
-              Operational Boundary & Advisory Flow
+              Deterministic Safety Boundary & Human Approval Flow
             </p>
             <p className="leading-relaxed text-forest-800">
-              <strong>Flow:</strong> Monitor → Detect → Plan → <u>Farmer Decision</u> → Task → Verify/Reassess.
-              Accepting an advisory records your approval and creates a follow-up checklist task (governed by your <em>Automatic Task Creation</em> setting). <strong>Acceptance never commands pumps, valves, or farm equipment.</strong> Physical execution remains manual crew work.
+              <strong>Workflow:</strong> Risk Assessment → AI Evaluation → Deterministic Safety Guard → <u>Action Plan</u> → <u>Farmer Decision</u> → Executable Task → Risk Reassessment.
+              Plans requiring human approval remain locked until you explicitly accept or reject them. <strong>Approving an action plan instantiates a tracked field task for manual crew execution; it never commands physical farm equipment or automated valves.</strong>
             </p>
           </div>
         </div>
@@ -135,9 +257,11 @@ export default function AdvisoryPlansPage() {
         >
           <div className="flex items-center gap-2">
             {feedbackMessage.type === "success" ? (
-              <CheckCircle2 size={16} className="text-emerald-600" />
+              <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+            ) : feedbackMessage.type === "error" ? (
+              <ShieldAlert size={16} className="text-rose-600 shrink-0" />
             ) : (
-              <Info size={16} className="text-blue-600" />
+              <Info size={16} className="text-blue-600 shrink-0" />
             )}
             <span>{feedbackMessage.text}</span>
           </div>
@@ -164,39 +288,39 @@ export default function AdvisoryPlansPage() {
             <span className="text-xs text-blue-700 font-medium">awaiting decision</span>
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            Inspect evidence and assess local parcel conditions
+            Requires human sign-off before operational execution
           </p>
         </Card>
 
         <Card className="p-5 border-emerald-200 bg-emerald-50/20">
           <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
-            Accepted by Farmer
+            Approved / Executing
           </span>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-3xl font-extrabold text-emerald-950">
-              {acceptedCount}
+              {approvedExecutingCount}
             </span>
             <span className="text-xs text-emerald-700 font-medium">
-              {settings.autoTaskOnAccept ? "Follow-up tasks scheduled" : "No tasks scheduled (Setting off)"}
+              active or completed in field
             </span>
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            Approved for manual field execution
+            Approved for manual crew work & tracked on Task Board
           </p>
         </Card>
 
         <Card className="p-5 border-slate-200 bg-slate-50/50">
           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600">
-            Rejected / Dismissed
+            Rejected / Cancelled
           </span>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-3xl font-extrabold text-slate-800">
-              {rejectedCount}
+              {rejectedCancelledCount}
             </span>
-            <span className="text-xs text-slate-500">zero tasks scheduled</span>
+            <span className="text-xs text-slate-500">zero tasks dispatched</span>
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            Farmer determined advice inapplicable or unnecessary
+            Farmer or SafetyGuard determined action inadmissible
           </p>
         </Card>
       </div>
@@ -216,24 +340,13 @@ export default function AdvisoryPlansPage() {
               onChange={(e) => setStatusFilter(e.target.value)}
               className="rounded-lg border border-[#dfe6dd] bg-white px-2.5 py-1 text-xs text-ink focus:outline-hidden"
             >
-              <option value="ALL">All Statuses ({advisories.length})</option>
-              <option value="Pending Decision">Pending ({pendingCount})</option>
-              <option value="Accepted">Accepted ({acceptedCount})</option>
-              <option value="Rejected">Rejected ({rejectedCount})</option>
-            </select>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <span className="text-slate-500 font-medium">Category:</span>
-            <select
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              className="rounded-lg border border-[#dfe6dd] bg-white px-2.5 py-1 text-xs text-ink focus:outline-hidden"
-            >
-              <option value="ALL">All Categories</option>
-              <option value="Nutrient Management">Nutrient Management</option>
-              <option value="Irrigation Timing">Irrigation Timing</option>
-              <option value="Canopy Inspection">Canopy Inspection</option>
+              <option value="ALL">All Statuses ({plans.length})</option>
+              <option value="pending_approval">Pending Approval ({pendingCount})</option>
+              <option value="approved">Approved</option>
+              <option value="executing">Executing</option>
+              <option value="completed">Completed</option>
+              <option value="rejected">Rejected</option>
+              <option value="cancelled">Cancelled</option>
             </select>
           </div>
 
@@ -245,195 +358,278 @@ export default function AdvisoryPlansPage() {
               className="rounded-lg border border-[#dfe6dd] bg-white px-2.5 py-1 text-xs text-ink focus:outline-hidden"
             >
               <option value="ALL">All Priorities</option>
-              <option value="High">High</option>
-              <option value="Medium">Medium</option>
-              <option value="Low">Low</option>
+              <option value="urgent">Urgent</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
             </select>
           </div>
         </div>
       </div>
 
-      {/* Advisory Cards List */}
-      <div className="mt-6 space-y-5">
-        {filteredAdvisories.length === 0 ? (
-          <Card className="p-10 text-center">
-            <p className="text-xs font-semibold text-slate-500">
-              No advisory plans match the selected filters.
-            </p>
-          </Card>
-        ) : (
-          filteredAdvisories.map((plan) => (
-            <Card key={plan.id} className="p-6 border-[#dfe6dd]">
-              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-xs font-bold text-forest-700">
-                      {plan.id}
-                    </span>
-                    <span
-                      className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
-                        plan.priority === "High"
-                          ? "bg-rose-100 text-rose-800"
-                          : plan.priority === "Medium"
-                          ? "bg-amber-100 text-amber-800"
-                          : "bg-slate-100 text-slate-700"
-                      }`}
-                    >
-                      {plan.priority} Priority
-                    </span>
-                    <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-medium text-slate-700">
-                      {plan.category}
-                    </span>
-                    <span
-                      className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
-                        plan.status === "Pending Decision"
-                          ? "bg-blue-100 text-blue-800"
-                          : plan.status === "Accepted"
-                          ? "bg-emerald-100 text-emerald-800"
-                          : "bg-slate-100 text-slate-600 line-through"
-                      }`}
-                    >
-                      {plan.status}
-                    </span>
-                  </div>
+      {/* Loading State */}
+      {isLoadingPlans && (
+        <Card className="mt-6 flex flex-col items-center justify-center p-12 text-center">
+          <RefreshCw size={28} className="animate-spin text-forest-600" />
+          <p className="mt-3 text-sm font-semibold text-ink">
+            Loading action plans for {selectedFarm?.name || "selected farm"}...
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            Fetching authoritative agronomic plans and human decision records.
+          </p>
+        </Card>
+      )}
 
-                  <h3 className="mt-2 text-base font-bold text-ink sm:text-lg">
-                    {plan.title}
-                  </h3>
-                  <div className="mt-1 flex items-center gap-3 text-xs text-slate-500">
-                    <span>
-                      Target: <strong>{plan.targetParcel}</strong> ({plan.crop})
-                    </span>
-                    {plan.acceptedAt && (
-                      <span>Accepted at: <strong>{plan.acceptedAt}</strong></span>
-                    )}
-                    {plan.associatedTaskId && (
-                      <span className="text-forest-700 font-semibold">
-                        Task: <strong>{plan.associatedTaskId}</strong>
+      {/* Error State */}
+      {!isLoadingPlans && plansError && (
+        <div className="mt-6 rounded-xl border border-rose-200 bg-rose-50 p-6 text-center">
+          <AlertTriangle size={28} className="mx-auto text-rose-600" />
+          <h3 className="mt-2 text-sm font-bold text-rose-900">
+            Unable to Load Action Plans
+          </h3>
+          <p className="mt-1 text-xs text-rose-700 max-w-md mx-auto">
+            {plansError}
+          </p>
+          {selectedFarmId && (
+            <button
+              type="button"
+              onClick={() => void loadPlans(selectedFarmId)}
+              className="mt-4 rounded-lg bg-rose-700 px-3.5 py-1.5 text-xs font-semibold text-white shadow-2xs hover:bg-rose-800"
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Empty State: No plans exist */}
+      {!isLoadingPlans && !plansError && plans.length === 0 && (
+        <Card className="mt-6 flex flex-col items-center justify-center p-12 text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-100 text-blue-700">
+            <ListChecks size={24} />
+          </div>
+          <h3 className="mt-4 text-base font-bold text-ink">
+            No Action Plans Recorded
+          </h3>
+          <p className="mt-1 text-xs text-slate-600 max-w-md">
+            No agronomic action plans currently exist for <strong>{selectedFarm?.name || "this farm"}</strong>.
+            You can evaluate risks in the Risk Center with AI, and convert safe proposals into actionable plans.
+          </p>
+          <Link
+            href="/risks"
+            className="mt-5 inline-flex items-center gap-2 rounded-xl bg-forest-700 px-4 py-2.5 text-xs font-semibold text-white shadow-2xs hover:bg-forest-800"
+          >
+            Go to Risk Center
+          </Link>
+        </Card>
+      )}
+
+      {/* Empty Filtered Results */}
+      {!isLoadingPlans && !plansError && plans.length > 0 && filteredPlans.length === 0 && (
+        <Card className="mt-6 p-10 text-center">
+          <p className="text-xs font-semibold text-slate-500">
+            No action plans match the selected filters.
+          </p>
+        </Card>
+      )}
+
+      {/* Action Plan Cards List */}
+      {!isLoadingPlans && !plansError && filteredPlans.length > 0 && (
+        <div className="mt-6 space-y-5">
+          {filteredPlans.map((plan) => {
+            const statusStyle = formatPlanStatus(plan.status, plan.approval_state);
+            const priorityStyle = formatPlanPriority(plan.priority);
+            const policyStyle = formatPolicyDecision(plan.policy_decision);
+            const zoneName = resolveZoneName(plan.zone_id, backendZones);
+            const isPending =
+              plan.approval_state === "pending_approval" ||
+              plan.status === "pending_approval" ||
+              plan.approval_state === "draft";
+            const isApproved =
+              plan.approval_state === "approved" ||
+              plan.status === "approved" ||
+              plan.approval_state === "executing" ||
+              plan.status === "executing" ||
+              plan.approval_state === "completed";
+            const isRejected =
+              plan.approval_state === "rejected" ||
+              plan.status === "rejected";
+
+            const rawSteps = (plan.steps || []) as (ActionPlanStep | Record<string, unknown>)[];
+
+            return (
+              <Card key={plan.id} className="p-6 border-[#dfe6dd]">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-xs font-bold text-forest-700">
+                        {plan.id.slice(0, 12)}
                       </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Farmer Decision Action Buttons */}
-                <div className="flex items-center gap-2 self-end sm:self-start">
-                  {plan.status === "Pending Decision" ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRejectingPlan(plan);
-                          setRejectReason("");
-                        }}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3.5 py-2 text-xs font-semibold text-rose-700 shadow-2xs hover:bg-rose-50 transition-colors"
-                      >
-                        <XCircle size={14} />
-                        Reject
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleAccept(plan.id)}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-forest-700 px-4 py-2 text-xs font-semibold text-white shadow-2xs hover:bg-forest-800 transition-colors"
-                      >
-                        <CheckCircle2 size={14} />
-                        Accept Plan
-                      </button>
-                    </>
-                  ) : plan.status === "Accepted" ? (
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-50 px-3.5 py-2 text-xs font-bold text-emerald-800 border border-emerald-200">
-                        <CheckCircle2 size={15} />
-                        Accepted by Farmer
+                      <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${priorityStyle.badgeClass}`}>
+                        {priorityStyle.label}
+                      </span>
+                      <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${statusStyle.badgeClass}`}>
+                        {statusStyle.label}
+                      </span>
+                      <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${policyStyle.badgeClass}`}>
+                        {policyStyle.label}
                       </span>
                     </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
+
+                    <h3 className="mt-2 text-base font-bold text-ink sm:text-lg">
+                      {plan.title || plan.action_summary || "Agronomic Field Plan"}
+                    </h3>
+                    <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                      <span>
+                        Target: <strong>{zoneName}</strong>
+                      </span>
+                      {plan.action_type && (
+                        <span>
+                          Action Type: <strong>{plan.action_type}</strong>
+                        </span>
+                      )}
+                      {plan.created_at && (
+                        <span className="inline-flex items-center gap-1 font-mono text-[11px]">
+                          <Clock size={12} className="text-slate-400" />
+                          {new Date(plan.created_at).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Decision Action Buttons */}
+                  <div className="flex items-center gap-2 self-end sm:self-start">
+                    {isPending ? (
+                      <>
+                        <button
+                          type="button"
+                          disabled={isSubmitting}
+                          onClick={() => {
+                            setRejectingPlan(plan);
+                            setRejectReason("");
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3.5 py-2 text-xs font-semibold text-rose-700 shadow-2xs hover:bg-rose-50 transition-colors disabled:opacity-50"
+                        >
+                          <XCircle size={14} />
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSubmitting}
+                          onClick={() => void handleApprove(plan.id)}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-forest-700 px-4 py-2 text-xs font-semibold text-white shadow-2xs hover:bg-forest-800 transition-colors disabled:opacity-50"
+                        >
+                          <CheckCircle2 size={14} />
+                          Approve Plan
+                        </button>
+                      </>
+                    ) : isApproved ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-50 px-3.5 py-2 text-xs font-bold text-emerald-800 border border-emerald-200">
+                        <CheckCircle2 size={15} />
+                        {plan.approval_state === "completed" ? "Executed & Completed" : "Approved by Farmer"}
+                      </span>
+                    ) : isRejected ? (
                       <span className="inline-flex items-center gap-1.5 rounded-xl bg-slate-100 px-3.5 py-2 text-xs font-bold text-slate-600 border border-slate-200">
                         <XCircle size={15} />
                         Rejected
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          reconsiderPlan(plan.id);
-                          setFeedbackMessage({
-                            text: `Plan ${plan.id} returned to Pending Decision state for farmer re-evaluation.`,
-                            type: "info",
-                          });
-                        }}
-                        className="inline-flex items-center gap-1 rounded-xl border border-[#dfe6dd] bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors shadow-2xs"
-                        title="Re-open this plan for review"
-                      >
-                        <RefreshCw size={12} />
-                        Reconsider
-                      </button>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 rounded-xl bg-slate-100 px-3.5 py-2 text-xs font-bold text-slate-700 border border-slate-200">
+                        {statusStyle.label}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Plan Objective & Summary */}
+                <div className="mt-4 space-y-3 text-xs leading-relaxed border-t border-[#edf0eb] pt-3">
+                  {plan.objective && (
+                    <div>
+                      <strong className="text-ink block mb-0.5">Operational Objective:</strong>
+                      <p className="text-slate-700">{plan.objective}</p>
                     </div>
                   )}
-                </div>
-              </div>
 
-              {/* Rejection Note if Rejected */}
-              {plan.status === "Rejected" && plan.rejectionReason && (
-                <div className="mt-4 rounded-lg bg-slate-100 p-3 text-xs text-slate-700">
-                  <span className="font-semibold block mb-0.5">Farmer Rejection Reason:</span>
-                  {plan.rejectionReason}
-                </div>
-              )}
-
-              {/* Agronomic Reasoning */}
-              <div className="mt-4 space-y-3 text-xs leading-relaxed border-t border-[#edf0eb] pt-3">
-                <div>
-                  <strong className="text-ink block mb-0.5">Agronomic Reasoning:</strong>
-                  <p className="text-slate-700">{plan.reasoning}</p>
-                </div>
-
-                {/* Supporting Evidence Card */}
-                <div className="rounded-xl border border-[#dfe6dd] bg-slate-50/80 p-3.5 space-y-1.5">
-                  <div className="flex items-center gap-2 font-semibold text-ink">
-                    <Database size={14} className="text-forest-600" />
-                    <span>Supporting Research Evidence & Citations:</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-600 pl-5">
-                    <div>
-                      <span className="text-[11px] text-slate-500 block">Dataset Source:</span>
-                      <strong className="text-ink font-medium">{plan.supportingEvidence.datasetSource}</strong>
+                  {plan.action_summary && plan.action_summary !== plan.title && (
+                    <div className="rounded-xl border border-forest-100 bg-[#f6f9f5] p-3.5">
+                      <strong className="text-forest-900 block mb-0.5">Action Protocol:</strong>
+                      <p className="text-forest-800">{plan.action_summary}</p>
                     </div>
-                    <div>
-                      <span className="text-[11px] text-slate-500 block">Metrics Cited:</span>
-                      <span className="font-mono text-ink text-[11px]">{plan.supportingEvidence.metricsCited}</span>
-                    </div>
-                  </div>
-                </div>
+                  )}
 
-                {/* Recommended Field Action */}
-                <div className="rounded-xl border border-forest-100 bg-[#f6f9f5] p-3.5">
-                  <strong className="text-forest-900 block mb-0.5">Recommended Field Action:</strong>
-                  <p className="text-forest-800">{plan.recommendedAction}</p>
-                </div>
-
-                {/* Uncertainty & Operational Boundary Disclosures */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px] pt-1">
-                  <div className="flex items-start gap-2 text-amber-900 bg-amber-50/60 rounded-lg p-2.5 border border-amber-200">
-                    <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-600" />
+                  {/* Agronomic Rationale */}
+                  {plan.rationale && (
                     <div>
-                      <span className="font-bold block">Scientific Uncertainty:</span>
-                      {plan.uncertaintyDisclosure}
+                      <strong className="text-ink block mb-0.5">Agronomic Rationale:</strong>
+                      <p className="text-slate-700">{plan.rationale}</p>
                     </div>
-                  </div>
+                  )}
 
-                  <div className="flex items-start gap-2 text-blue-900 bg-blue-50/60 rounded-lg p-2.5 border border-blue-200">
-                    <Info size={14} className="mt-0.5 shrink-0 text-blue-600" />
-                    <div>
-                      <span className="font-bold block">Operational Boundary:</span>
-                      {plan.operationalBoundary}
+                  {/* Ordered Action Steps */}
+                  {rawSteps.length > 0 && (
+                    <div className="rounded-xl border border-[#dfe6dd] bg-slate-50/70 p-3.5 space-y-2">
+                      <div className="flex items-center gap-2 font-semibold text-ink text-xs">
+                        <ListChecks size={15} className="text-forest-600" />
+                        <span>Execution Steps ({rawSteps.length}):</span>
+                      </div>
+                      <ol className="space-y-1.5 pl-5 list-decimal text-xs text-slate-700">
+                        {rawSteps.map((step, sIdx) => {
+                          const title = String(step.title || `Step ${sIdx + 1}`);
+                          const desc = step.description ? String(step.description) : null;
+                          return (
+                            <li key={sIdx} className="leading-relaxed">
+                              <span className="font-semibold text-ink">{title}</span>
+                              {desc && <p className="text-[11px] text-slate-600 mt-0.5">{desc}</p>}
+                            </li>
+                          );
+                        })}
+                      </ol>
                     </div>
-                  </div>
+                  )}
+
+                  {/* Supporting Evidence / Telemetry */}
+                  {plan.evidence && Object.keys(plan.evidence).length > 0 && (
+                    <div className="rounded-xl border border-[#dfe6dd] bg-slate-50/60 p-3.5 space-y-1.5">
+                      <div className="flex items-center gap-2 font-semibold text-ink">
+                        <Database size={14} className="text-forest-600" />
+                        <span>Supporting Telemetry Evidence:</span>
+                      </div>
+                      <div className="text-[11px] font-mono text-slate-600 pl-5">
+                        {JSON.stringify(plan.evidence, null, 2)}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Safety Flags & Disclosures */}
+                  {(plan.safety_flags && plan.safety_flags.length > 0) || plan.safety_notes ? (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 text-[11px] text-amber-900 space-y-1">
+                      <div className="flex items-center gap-1.5 font-bold text-amber-950">
+                        <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                        <span>Deterministic Safety Policies & Boundaries:</span>
+                      </div>
+                      {plan.safety_flags && plan.safety_flags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 pt-0.5">
+                          {plan.safety_flags.map((flag, fIdx) => (
+                            <span
+                              key={fIdx}
+                              className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-amber-900"
+                            >
+                              policy: {flag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {plan.safety_notes && (
+                        <p className="mt-1 italic">{plan.safety_notes}</p>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
-              </div>
-            </Card>
-          ))
-        )}
-      </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
 
       {/* Reject Modal */}
       {rejectingPlan && (
@@ -446,7 +642,7 @@ export default function AdvisoryPlansPage() {
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
             <div className="flex items-center justify-between border-b border-[#edf0eb] pb-3">
               <h3 id="reject-modal-title" className="text-base font-bold text-ink">
-                Reject Advisory Plan ({rejectingPlan.id})
+                Reject Action Plan ({rejectingPlan.id.slice(0, 10)})
               </h3>
               <button
                 type="button"
@@ -459,84 +655,40 @@ export default function AdvisoryPlansPage() {
 
             <form onSubmit={handleConfirmReject} className="mt-4 space-y-4">
               <p className="text-xs text-slate-600">
-                Please provide a rationale for rejecting this plan for <strong>{rejectingPlan.targetParcel}</strong>. Rejecting this advisory guarantees that no task will be created.
+                Please provide an agronomic rationale for rejecting this plan. Rejecting this plan records your decision and guarantees that no field tasks are dispatched.
               </p>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Rejection Reason / Field Context *
+                  Rejection Reason / Field Rationale
                 </label>
                 <textarea
                   rows={3}
-                  required
                   value={rejectReason}
                   onChange={(e) => setRejectReason(e.target.value)}
                   className="w-full rounded-lg border border-[#dfe6dd] px-3 py-2 text-xs text-ink focus:border-forest-600 focus:outline-hidden"
-                  placeholder="e.g. Field inspection confirmed soil moisture is adequate; secondary irrigation would cause waterlogging."
+                  placeholder="e.g., Visual inspection indicates soil moisture is sufficient; additional irrigation would risk root rot."
                 />
               </div>
 
               <div className="flex items-center justify-end gap-2 border-t border-[#edf0eb] pt-4">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setRejectingPlan(null)}
-                  className="rounded-xl border border-[#dfe6dd] px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  className="rounded-xl border border-[#dfe6dd] px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+                  disabled={isSubmitting}
+                  className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
                 >
-                  Confirm Rejection
+                  {isSubmitting ? "Rejecting..." : "Confirm Rejection"}
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* Reset State Confirmation Modal */}
-      {showResetConfirm && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="reset-modal-title"
-        >
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-            <div className="flex items-center gap-3 text-amber-600">
-              <AlertTriangle size={24} />
-              <h3 id="reset-modal-title" className="text-base font-bold text-ink">
-                Reset Advisory Review State?
-              </h3>
-            </div>
-            <p className="mt-3 text-xs text-slate-600 leading-relaxed">
-              This will restore all advisory plans to their default &quot;Pending Decision&quot; state. Existing tasks already created on the task board will remain intact.
-            </p>
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowResetConfirm(false)}
-                className="rounded-xl border border-[#dfe6dd] px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  resetPlans();
-                  setShowResetConfirm(false);
-                  setFeedbackMessage({
-                    text: "Advisory review states reset to Pending Decision.",
-                    type: "info",
-                  });
-                }}
-                className="rounded-xl bg-forest-700 px-4 py-2 text-xs font-semibold text-white hover:bg-forest-800"
-              >
-                Confirm Reset
-              </button>
-            </div>
           </div>
         </div>
       )}

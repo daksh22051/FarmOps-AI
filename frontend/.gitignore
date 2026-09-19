@@ -1,4 +1,4 @@
-﻿# Next.js build output and dependencies
+# Next.js build output and dependencies
 node_modules/
 .next/
 out/
@@ -11,3 +11,7 @@ build/
 # Tooling and build caches
 *.tsbuildinfo
 .DS_Store
+
+# Explicitly track frontend/lib despite python root lib/ rule
+!lib/
+!lib/**

@@ -23,7 +23,14 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Set database URL from app settings
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+db_url = settings.DATABASE_URL
+if not db_url:
+    raise RuntimeError(
+        "DATABASE_URL is not configured in the environment. "
+        "Please set DATABASE_URL (Supabase PostgreSQL asyncpg connection string) in .env or your environment variables."
+    )
+
+config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = Base.metadata
 

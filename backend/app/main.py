@@ -8,8 +8,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.core.database import engine, is_sqlite
-from app.models import Base
+from app.core import database
 from app.api.v1.router import api_v1_router
 from app.mqtt.client import mqtt_worker
 from app.core.exceptions import FarmOpsException
@@ -21,11 +20,8 @@ async def lifespan(app: FastAPI):
     # --- Startup ---
     logger.info(f"Starting {settings.PROJECT_NAME} (v{settings.VERSION}) in {settings.ENVIRONMENT} mode")
 
-    # In development or testing with sqlite, create tables automatically if needed
-    if is_sqlite or settings.ENVIRONMENT == "development":
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database tables verified/created.")
+    if settings.is_database_configured:
+        logger.info("Supabase PostgreSQL configuration detected.")
 
     # Start MQTT background worker if enabled
     if settings.MQTT_ENABLED:
@@ -37,8 +33,9 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down FarmOps AI Backend...")
     if settings.MQTT_ENABLED:
         await mqtt_worker.stop()
-    await engine.dispose()
-    logger.info("Database engine connections closed.")
+    if database._engine is not None:
+        await database._engine.dispose()
+        logger.info("Database engine connection pool disposed.")
 
 
 app = FastAPI(

@@ -27,6 +27,7 @@ from app.models import (
 async def test_all_models_registered_in_metadata():
     tables = Base.metadata.tables.keys()
     required_tables = [
+        "profiles",
         "farms",
         "farm_memberships",
         "zones",

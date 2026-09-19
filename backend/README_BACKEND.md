@@ -97,8 +97,10 @@ Copy `.env.example` to `.env` in the `backend/` directory:
 cp .env.example .env
 ```
 Fill in your Supabase credentials:
-- `DATABASE_URL`: `postgresql+asyncpg://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres`
-- `SUPABASE_JWT_SECRET`: Found in Supabase Dashboard -> Project Settings -> API -> JWT Secret.
+- `DATABASE_URL`: `postgresql+asyncpg://postgres.[PROJECT-REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres`
+- `SUPABASE_URL`: `https://[PROJECT-REF].supabase.co`
+- `SUPABASE_PUBLISHABLE_KEY`: `your-supabase-publishable-key`
+- `SUPABASE_SECRET_KEY`: `your-supabase-secret-key`
 - `GEMINI_API_KEY`: (Optional for local testing; without it, `MockAIProvider` activates automatically).
 
 ### 3. Install Dependencies

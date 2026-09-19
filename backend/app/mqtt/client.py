@@ -4,7 +4,7 @@ Async MQTT Client Worker using aiomqtt
 
 import asyncio
 from app.config import settings
-from app.core.database import AsyncSessionLocal
+from app.core.database import get_session_factory
 from app.mqtt.handlers import handle_telemetry_message
 from app.core.logging import logger
 
@@ -64,7 +64,8 @@ class MQTTWorker:
 
                     async for message in client.messages:
                         topic_str = str(message.topic)
-                        async with AsyncSessionLocal() as session:
+                        session_maker = get_session_factory()
+                        async with session_maker() as session:
                             try:
                                 await handle_telemetry_message(session, topic_str, message.payload)
                             except Exception as e:

@@ -3,6 +3,7 @@ Exports all domain models for SQLAlchemy metadata and Alembic migrations.
 """
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.profile import Profile
 from app.models.farm import Farm, FarmMembership, Zone
 from app.models.device import Device
 from app.models.sensor_event import SensorEvent
@@ -18,6 +19,7 @@ __all__ = [
     "Base",
     "TimestampMixin",
     "UUIDPrimaryKeyMixin",
+    "Profile",
     "Farm",
     "FarmMembership",
     "Zone",

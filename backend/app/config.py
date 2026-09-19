@@ -1,10 +1,10 @@
 """
 FarmOps AI Backend Configuration
-Uses Pydantic v2 Settings to parse environment variables from .env or OS environment.
+Uses Pydantic v2 Settings to parse environment variables strictly from .env or OS environment.
 """
 
-from typing import List, Union
-from pydantic import Field, field_validator
+from typing import List, Union, Optional
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import json
 
@@ -44,26 +44,60 @@ class Settings(BaseSettings):
                 return [v]
         return v
 
-    # Supabase PostgreSQL Database (Async)
-    # Default to a local SQLite async URL if DATABASE_URL is not set (convenient for local dev/testing)
-    DATABASE_URL: str = "sqlite+aiosqlite:///./farmops.db"
-    DATABASE_DIRECT_URL: str = "sqlite:///./farmops.db"
+    # Supabase PostgreSQL Database Configuration (Async via asyncpg)
+    DATABASE_URL: str = ""
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
+    DB_POOL_TIMEOUT: int = 30
     DB_ECHO: bool = False
 
-    # Supabase Auth
-    SUPABASE_URL: str = "https://example.supabase.co"
-    SUPABASE_ANON_KEY: str = ""
-    SUPABASE_SERVICE_ROLE_KEY: str = ""
-    SUPABASE_JWT_SECRET: str = "dev-insecure-jwt-secret-change-me"
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, v: Union[str, None]) -> str:
+        if not v or not isinstance(v, str):
+            return ""
+        v = v.strip()
+        if v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        if v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
+
+    # Supabase Credentials
+    SUPABASE_URL: str = ""
+    SUPABASE_PUBLISHABLE_KEY: str = ""
+    SUPABASE_SECRET_KEY: str = ""
+    
+    # Fallback / Aliases
+    SUPABASE_ANON_KEY: Optional[str] = None
+    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
+    SUPABASE_JWT_SECRET: Optional[str] = None
     SUPABASE_JWT_ALGORITHM: str = "HS256"
 
-    # Google Gemini API
+    @model_validator(mode="after")
+    def populate_supabase_keys(self) -> "Settings":
+        # Resolve publishable key
+        if not self.SUPABASE_PUBLISHABLE_KEY and self.SUPABASE_ANON_KEY:
+            self.SUPABASE_PUBLISHABLE_KEY = self.SUPABASE_ANON_KEY
+        # Resolve secret key
+        if not self.SUPABASE_SECRET_KEY and self.SUPABASE_SERVICE_ROLE_KEY:
+            self.SUPABASE_SECRET_KEY = self.SUPABASE_SERVICE_ROLE_KEY
+        elif not self.SUPABASE_SECRET_KEY and self.SUPABASE_JWT_SECRET:
+            self.SUPABASE_SECRET_KEY = self.SUPABASE_JWT_SECRET
+
+        if not self.SUPABASE_JWT_SECRET:
+            self.SUPABASE_JWT_SECRET = self.SUPABASE_SECRET_KEY or "farmops-default-jwt-secret-key-32-chars-min"
+        return self
+
+    @property
+    def is_database_configured(self) -> bool:
+        return bool(self.DATABASE_URL and not self.DATABASE_URL.startswith("sqlite"))
+
+    # Google Gemini API (Multi-Agent Orchestration)
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
 
-    # MQTT Broker for IoT Telemetry
+    # MQTT Broker (IoT Telemetry Ingestion)
     MQTT_ENABLED: bool = False
     MQTT_BROKER_HOST: str = "broker.hivemq.com"
     MQTT_BROKER_PORT: int = 1883

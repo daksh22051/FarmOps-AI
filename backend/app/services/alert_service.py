@@ -13,6 +13,52 @@ from app.core.exceptions import EntityNotFoundException
 
 class AlertService:
     @staticmethod
+    async def create_alert(
+        session: AsyncSession,
+        farm_id: str,
+        message: str,
+        severity: str = "warning",
+        zone_id: Optional[str] = None,
+        risk_id: Optional[str] = None,
+        channel: str = "in_app",
+        dedupe_key: Optional[str] = None,
+        auto_commit: bool = False,
+    ) -> Alert:
+        """
+        Creates an alert if an active alert with the given dedupe_key does not already exist.
+        """
+        if not dedupe_key:
+            dedupe_key = f"{farm_id}:{severity}:{message[:32]}"
+
+        res = await session.execute(
+            select(Alert).where(
+                Alert.farm_id == farm_id,
+                Alert.dedupe_key == dedupe_key,
+                Alert.acknowledged_at.is_(None),
+            )
+        )
+        existing = res.scalars().first()
+        if existing:
+            return existing
+
+        alert = Alert(
+            farm_id=farm_id,
+            zone_id=zone_id,
+            risk_id=risk_id,
+            severity=severity,
+            channel=channel,
+            message=message,
+            delivery_status="pending",
+            dedupe_key=dedupe_key,
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(alert)
+        if auto_commit:
+            await session.commit()
+            await session.refresh(alert)
+        return alert
+
+    @staticmethod
     async def get_alerts(
         session: AsyncSession,
         farm_id: str,

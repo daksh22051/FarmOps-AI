@@ -18,6 +18,7 @@ from app.schemas.common import APIResponse
 router = APIRouter(prefix="/audit", tags=["Audit & Observability"])
 
 
+@router.get("", response_model=APIResponse[List[AuditEventResponse]])
 @router.get("/events", response_model=APIResponse[List[AuditEventResponse]])
 async def get_audit_events(
     farm_id: Optional[str] = Query(None, description="Filter by farm ID"),

@@ -70,5 +70,7 @@ class MarketContextAgent(BaseAIAgent):
             "agent_version": self.version,
             "recommended_action_type": "adjust_harvest_schedule",
             "recommended_action_summary": proposal.recommendation,
-            "estimated_cost": 0.0,
+            # Cost is not derivable from telemetry; surface it as unknown rather
+            # than inventing a figure the farmer might budget against.
+            "estimated_cost": None,
         }

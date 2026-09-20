@@ -46,9 +46,21 @@ class Settings(BaseSettings):
 
     # Supabase PostgreSQL Database Configuration (Async via asyncpg)
     DATABASE_URL: str = ""
-    DB_POOL_SIZE: int = 10
-    DB_MAX_OVERFLOW: int = 20
+    # Supabase's direct port (5432) allows only a few dozen connections for the whole
+    # project, and reserves some for superusers. A dev machine typically runs the API,
+    # the reloader's old worker and a test run at once, so the per-process ceiling
+    # (pool_size + max_overflow) must stay small or the project runs out of slots and
+    # every request fails with TooManyConnectionsError.
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 5
     DB_POOL_TIMEOUT: int = 30
+    DB_POOL_RECYCLE: int = 900  # seconds; below Supabase's idle-connection timeout
+    DB_IDLE_TX_TIMEOUT_MS: int = 60_000  # Postgres reclaims abandoned open transactions
+
+    # Demo/simulator tooling writes simulated readings into the same tables as real
+    # telemetry, so it must be switched off anywhere that serves real farms. Left
+    # unset it follows ENVIRONMENT (see disable_demo_in_production below).
+    DEMO_ENDPOINTS_ENABLED: Optional[bool] = None
     DB_ECHO: bool = False
 
     @field_validator("DATABASE_URL", mode="before")
@@ -88,6 +100,17 @@ class Settings(BaseSettings):
         if not self.SUPABASE_JWT_SECRET:
             self.SUPABASE_JWT_SECRET = self.SUPABASE_SECRET_KEY or "farmops-default-jwt-secret-key-32-chars-min"
         return self
+
+    @model_validator(mode="after")
+    def disable_demo_in_production(self) -> "Settings":
+        """Default the simulator off in production unless explicitly overridden."""
+        if self.DEMO_ENDPOINTS_ENABLED is None:
+            self.DEMO_ENDPOINTS_ENABLED = not self.is_production
+        return self
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.strip().lower() in {"production", "prod"}
 
     @property
     def is_database_configured(self) -> bool:

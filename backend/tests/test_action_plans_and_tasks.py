@@ -362,9 +362,11 @@ async def test_07_task_cancellation_workflow(client: AsyncClient, auth_headers: 
     assert cancel_res.status_code == 200
     assert cancel_res.json()["data"]["status"] == "cancelled"
 
-    # Cannot complete a cancelled task
+    # Cannot complete a cancelled task. Every illegal task transition now comes back as
+    # 409 Conflict from the one shared state machine, rather than each endpoint picking
+    # its own code (this path used to answer 400 from its own ad-hoc check).
     complete_res = await client.post(f"/api/v1/tasks/{task_id}/complete", json={}, headers=auth_headers)
-    assert complete_res.status_code == 400
+    assert complete_res.status_code == 409
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ import {
   getActionPlans,
   approveActionPlan,
   rejectActionPlan,
+  rescheduleActionPlan,
 } from "../../lib/api/farmops";
 import {
   formatPlanStatus,
@@ -29,6 +30,7 @@ import {
   ShieldAlert,
   Clock,
   ListChecks,
+  CalendarClock,
 } from "lucide-react";
 
 export default function AdvisoryPlansPage() {
@@ -46,6 +48,10 @@ export default function AdvisoryPlansPage() {
   // Rejection Modal State
   const [rejectingPlan, setRejectingPlan] = useState<ActionPlan | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [reschedulingPlan, setReschedulingPlan] = useState<ActionPlan | null>(null);
+  const [rescheduleFrom, setRescheduleFrom] = useState("");
+  const [rescheduleTo, setRescheduleTo] = useState("");
+  const [rescheduleReason, setRescheduleReason] = useState("");
 
   // User Feedback Message
   const [feedbackMessage, setFeedbackMessage] = useState<{
@@ -108,6 +114,63 @@ export default function AdvisoryPlansPage() {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Error approving plan.";
+      setFeedbackMessage({ text: msg, type: "error" });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  /**
+   * Opens the reschedule dialog. The window is prefilled from the plan's own proposed
+   * window when it has one; it is never prefilled with a guessed date, because the
+   * execution window is the farmer's decision about their own field.
+   */
+  const openRescheduleModal = (plan: ActionPlan) => {
+    const toLocalInput = (iso?: string | null) => {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "";
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+    setReschedulingPlan(plan);
+    setRescheduleFrom(toLocalInput(plan.earliest_at));
+    setRescheduleTo(toLocalInput(plan.latest_at));
+    setRescheduleReason("");
+  };
+
+  const handleConfirmReschedule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reschedulingPlan || isSubmitting) return;
+    if (!rescheduleFrom || !rescheduleTo) {
+      setFeedbackMessage({ text: "Enter both a start and an end for the new window.", type: "error" });
+      return;
+    }
+    if (new Date(rescheduleTo) <= new Date(rescheduleFrom)) {
+      setFeedbackMessage({ text: "The window must end after it starts.", type: "error" });
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const res = await rescheduleActionPlan(reschedulingPlan.id, {
+        earliest_at: new Date(rescheduleFrom).toISOString(),
+        latest_at: new Date(rescheduleTo).toISOString(),
+        review_notes: rescheduleReason.trim() || undefined,
+      });
+      if (res.error) {
+        setFeedbackMessage({ text: `Reschedule failed: ${res.error.message}`, type: "error" });
+      } else {
+        setFeedbackMessage({
+          text: "New execution window recorded. The plan is back on the approval queue as a new version; the earlier proposal is kept in the timeline.",
+          type: "info",
+        });
+        setReschedulingPlan(null);
+        if (selectedFarmId) {
+          await loadPlans(selectedFarmId);
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error rescheduling plan.";
       setFeedbackMessage({ text: msg, type: "error" });
     } finally {
       setIsSubmitting(false);
@@ -367,36 +430,53 @@ export default function AdvisoryPlansPage() {
         </div>
       </div>
 
-      {/* Loading State */}
+      {/* Loading Skeleton State */}
       {isLoadingPlans && (
-        <Card className="mt-6 flex flex-col items-center justify-center p-12 text-center">
-          <RefreshCw size={28} className="animate-spin text-forest-600" />
-          <p className="mt-3 text-sm font-semibold text-ink">
-            Loading action plans for {selectedFarm?.name || "selected farm"}...
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            Fetching authoritative agronomic plans and human decision records.
-          </p>
-        </Card>
+        <div className="mt-6 space-y-4">
+          <div className="flex items-center gap-2 text-xs font-semibold text-forest-800 bg-forest-50 border border-forest-200 px-3.5 py-2 rounded-xl">
+            <RefreshCw size={14} className="animate-spin text-forest-700" />
+            <span>Loading action plans for {selectedFarm?.name || "selected farm"}…</span>
+          </div>
+          {[1, 2].map((i) => (
+            <div key={i} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm animate-pulse space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="h-5 w-48 bg-slate-200 rounded-md" />
+                <div className="h-6 w-24 bg-slate-200 rounded-full" />
+              </div>
+              <div className="h-4 w-3/4 bg-slate-200 rounded-md" />
+              <div className="grid sm:grid-cols-4 gap-3 pt-2">
+                <div className="h-14 bg-slate-100 rounded-xl" />
+                <div className="h-14 bg-slate-100 rounded-xl" />
+                <div className="h-14 bg-slate-100 rounded-xl" />
+                <div className="h-14 bg-slate-100 rounded-xl" />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <div className="h-9 w-32 bg-slate-200 rounded-xl" />
+                <div className="h-9 w-20 bg-slate-200 rounded-xl" />
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
-      {/* Error State */}
+      {/* Error State with Retry */}
       {!isLoadingPlans && plansError && (
-        <div className="mt-6 rounded-xl border border-rose-200 bg-rose-50 p-6 text-center">
-          <AlertTriangle size={28} className="mx-auto text-rose-600" />
-          <h3 className="mt-2 text-sm font-bold text-rose-900">
-            Unable to Load Action Plans
+        <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50/90 p-6 text-center shadow-sm">
+          <AlertTriangle size={32} className="mx-auto text-rose-600" />
+          <h3 className="mt-2 text-base font-bold text-rose-950">
+            ⚠️ Unable to load action plans
           </h3>
-          <p className="mt-1 text-xs text-rose-700 max-w-md mx-auto">
-            {plansError}
+          <p className="mt-1 text-xs text-rose-800 max-w-md mx-auto">
+            {plansError || "The telemetry server took too long or encountered an error. Click below to retry."}
           </p>
           {selectedFarmId && (
             <button
               type="button"
               onClick={() => void loadPlans(selectedFarmId)}
-              className="mt-4 rounded-lg bg-rose-700 px-3.5 py-1.5 text-xs font-semibold text-white shadow-2xs hover:bg-rose-800"
+              className="mt-4 inline-flex items-center gap-2 rounded-xl bg-rose-700 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-rose-800 transition"
             >
-              Retry
+              <RefreshCw size={13} />
+              Retry Connection
             </button>
           )}
         </div>
@@ -512,6 +592,15 @@ export default function AdvisoryPlansPage() {
                         >
                           <XCircle size={14} />
                           Reject
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSubmitting}
+                          onClick={() => openRescheduleModal(plan)}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-white px-3.5 py-2 text-xs font-semibold text-amber-800 shadow-2xs hover:bg-amber-50 transition-colors disabled:opacity-50"
+                        >
+                          <CalendarClock size={14} />
+                          Reschedule
                         </button>
                         <button
                           type="button"
@@ -632,6 +721,99 @@ export default function AdvisoryPlansPage() {
       )}
 
       {/* Reject Modal */}
+      {reschedulingPlan && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reschedule-modal-title"
+        >
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between border-b border-[#edf0eb] pb-3">
+              <h3 id="reschedule-modal-title" className="text-base font-bold text-ink">
+                Reschedule Plan ({reschedulingPlan.id.slice(0, 10)})
+              </h3>
+              <button
+                type="button"
+                onClick={() => setReschedulingPlan(null)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmReschedule} className="mt-4 space-y-4">
+              <p className="text-xs text-slate-600">
+                Set the window in which this work should actually happen. The plan returns to
+                the approval queue as a new version, and the proposal you are replacing stays
+                in the audit timeline.
+              </p>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="reschedule-from" className="block text-xs font-semibold text-slate-700 mb-1">
+                    Earliest
+                  </label>
+                  <input
+                    id="reschedule-from"
+                    type="datetime-local"
+                    required
+                    value={rescheduleFrom}
+                    onChange={(e) => setRescheduleFrom(e.target.value)}
+                    className="w-full rounded-lg border border-[#dfe6dd] px-3 py-2 text-xs text-ink focus:border-forest-600 focus:outline-hidden"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="reschedule-to" className="block text-xs font-semibold text-slate-700 mb-1">
+                    Latest
+                  </label>
+                  <input
+                    id="reschedule-to"
+                    type="datetime-local"
+                    required
+                    value={rescheduleTo}
+                    onChange={(e) => setRescheduleTo(e.target.value)}
+                    className="w-full rounded-lg border border-[#dfe6dd] px-3 py-2 text-xs text-ink focus:border-forest-600 focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="reschedule-reason" className="block text-xs font-semibold text-slate-700 mb-1">
+                  Reason (optional)
+                </label>
+                <textarea
+                  id="reschedule-reason"
+                  rows={3}
+                  value={rescheduleReason}
+                  onChange={(e) => setRescheduleReason(e.target.value)}
+                  className="w-full rounded-lg border border-[#dfe6dd] px-3 py-2 text-xs text-ink focus:border-forest-600 focus:outline-hidden"
+                  placeholder="e.g., Rain forecast this afternoon; moving irrigation to tomorrow morning."
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 border-t border-[#edf0eb] pt-4">
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() => setReschedulingPlan(null)}
+                  className="rounded-xl border border-[#dfe6dd] px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {isSubmitting ? "Saving..." : "Save New Window"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {rejectingPlan && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"

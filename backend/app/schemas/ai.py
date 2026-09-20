@@ -75,6 +75,7 @@ class AIProposal(BaseModel):
 
 class AIEvaluationRequest(BaseModel):
     risk_id: str = Field(..., description="UUID of the RiskAssessment to evaluate")
+    require_live: bool = Field(False, description="Reject mock providers for operational dashboard requests")
 
 
 class AISafetyDecision(BaseModel):

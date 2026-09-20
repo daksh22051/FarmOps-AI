@@ -17,6 +17,7 @@ from app.schemas.plan import (
     ActionPlanCreate,
     ActionPlanResponse,
     ActionPlanApprovalRequest,
+    ActionPlanDecisionRequest,
 )
 from app.schemas.common import APIResponse
 
@@ -52,6 +53,24 @@ async def create_action_plan(
 
 
 # 2. List Action Plans by Farm
+@router.get("/plans", response_model=APIResponse[List[ActionPlanResponse]])
+async def list_plans_by_query(
+    farm_id: str = Query(..., description="Farm to list action plans for"),
+    zone_id: Optional[str] = Query(None, description="Filter by zone ID"),
+    approval_state: Optional[str] = Query(None, description="Filter by approval state"),
+    limit: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Action plan feed for a farm (PRD: GET /plans?farm_id=...)."""
+    # Pass every parameter explicitly: omitted ones would arrive as FastAPI Query
+    # default objects rather than None.
+    return await list_action_plans(
+        farm_id=farm_id, zone_id=zone_id, policy_decision=None,
+        approval_state=approval_state, status=None, limit=limit, db=db, user=user,
+    )
+
+
 @router.get("/farms/{farm_id}/action-plans", response_model=APIResponse[List[ActionPlanResponse]])
 @router.get("/plans/{farm_id}", response_model=APIResponse[List[ActionPlanResponse]])
 async def list_action_plans(
@@ -163,6 +182,54 @@ async def reject_action_plan(
         success=True,
         data=ActionPlanResponse.model_validate(rejected),
         message="Action plan rejected successfully.",
+    )
+
+
+# 5b. Unified decision endpoint (PRD: POST /plans/{planId}/decision)
+@router.post("/plans/{plan_id}/decision", response_model=APIResponse[ActionPlanResponse])
+async def decide_action_plan(
+    plan_id: str,
+    payload: ActionPlanDecisionRequest,
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """
+    Records the farmer's decision on a plan: approve, reject or reschedule.
+
+    Role and policy are enforced here, the decision and its reason are persisted,
+    and an audit event is written. A rejected plan never produces an executable
+    task; a rescheduled plan keeps its history and returns for approval.
+    """
+    plan = await verify_plan_access(plan_id=plan_id, db=db, user=user)
+    await check_farm_access(
+        db,
+        farm_id=plan.farm_id,
+        user=user,
+        allowed_roles=["owner", "manager", "agronomist"],
+    )
+
+    if payload.decision == "approve":
+        result = await ActionPlanService.approve_plan(
+            session=db, plan_id=plan_id, reviewer_id=user.id, review_notes=payload.reason
+        )
+    elif payload.decision == "reject":
+        result = await ActionPlanService.reject_plan(
+            session=db, plan_id=plan_id, reviewer_id=user.id, review_notes=payload.reason
+        )
+    else:
+        result = await ActionPlanService.reschedule_plan(
+            session=db,
+            plan_id=plan_id,
+            reviewer_id=user.id,
+            earliest_at=payload.earliest_at,
+            latest_at=payload.latest_at,
+            review_notes=payload.reason,
+        )
+
+    return APIResponse(
+        success=True,
+        data=ActionPlanResponse.model_validate(result),
+        message=f"Plan decision '{payload.decision}' recorded.",
     )
 
 

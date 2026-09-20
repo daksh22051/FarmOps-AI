@@ -1,6 +1,13 @@
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import { AppClientProvider } from "../components/app-provider";
+
+const inter = Inter({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-inter",
+});
 
 export const metadata: Metadata = {
   title: "FarmOps AI — Autonomous Farm-to-Field Advisory",
@@ -18,8 +25,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body suppressHydrationWarning>
+    <html lang="en" className={inter.variable}>
+      <body className={`${inter.className} antialiased`} suppressHydrationWarning>
         <AppClientProvider>{children}</AppClientProvider>
       </body>
     </html>

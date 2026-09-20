@@ -20,6 +20,7 @@ from app.schemas.task import (
     TaskStartRequest,
     TaskCompleteRequest,
     TaskCancelRequest,
+    TaskStatusTransition,
 )
 from app.schemas.common import APIResponse
 
@@ -45,6 +46,21 @@ async def create_task(
 
 
 # 2. List Tasks by Farm
+@router.get("/tasks", response_model=APIResponse[List[TaskResponse]])
+async def list_tasks_by_query(
+    farm_id: str = Query(..., description="Farm to list tasks for"),
+    zone_id: Optional[str] = Query(None, description="Filter by zone ID"),
+    status: Optional[str] = Query(None, description="Filter by task status"),
+    limit: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Authorized, filterable task list (`GET /tasks?farm_id=...`)."""
+    return await list_tasks(
+        farm_id=farm_id, zone_id=zone_id, status=status, limit=limit, db=db, user=user
+    )
+
+
 @router.get("/farms/{farm_id}/tasks", response_model=APIResponse[List[TaskResponse]])
 @router.get("/tasks/{farm_id}", response_model=APIResponse[List[TaskResponse]])
 async def list_tasks(
@@ -66,7 +82,9 @@ async def list_tasks(
 
 
 # 3. Retrieve Single Task Detail
-@router.get("/tasks/{task_id}", response_model=APIResponse[TaskResponse])
+# NOTE: no "/tasks/{task_id}" route here. It would be identical in shape to
+# "/tasks/{farm_id}" above, which is registered first and would always win,
+# silently returning a list where callers expected one task.
 @router.get("/tasks/detail/{task_id}", response_model=APIResponse[TaskResponse])
 async def get_task_detail(
     task_id: str,
@@ -177,6 +195,42 @@ async def cancel_task_execution(
         success=True,
         data=TaskResponse.model_validate(cancelled),
         message="Task cancelled successfully.",
+    )
+
+
+# 6b. Explicit status transition (PRD: PATCH /tasks/{taskId}/status)
+@router.patch("/tasks/{task_id}/status", response_model=APIResponse[TaskResponse])
+async def transition_task_status(
+    task_id: str,
+    payload: TaskStatusTransition,
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """
+    Moves a task to a new status, validating the transition and the actor's role.
+
+    This is the only route that can reach `blocked`, and it records the note and
+    evidence alongside the transition in the audit trail.
+    """
+    task = await verify_task_access(task_id=task_id, db=db, user=user)
+    await check_farm_access(
+        db,
+        farm_id=task.farm_id,
+        user=user,
+        allowed_roles=["owner", "manager", "agronomist", "operator"],
+    )
+    updated = await TaskService.transition_status(
+        db,
+        task_id=task_id,
+        actor_id=user.id,
+        target_status=payload.status,
+        note=payload.note,
+        evidence_url=payload.evidence_url,
+    )
+    return APIResponse(
+        success=True,
+        data=TaskResponse.model_validate(updated),
+        message=f"Task moved to '{updated.status}'.",
     )
 
 

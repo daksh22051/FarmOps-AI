@@ -2,7 +2,10 @@
 Direct Zone Resource Endpoints (/api/v1/zones)
 """
 
-from fastapi import APIRouter, Depends
+from typing import List, Optional
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import (
@@ -13,7 +16,10 @@ from app.core.security import (
 )
 from app.services.zone_service import ZoneService
 from app.services.audit_service import AuditService
+from app.services.sensor_event_service import SensorEventService
+from app.services.risk_detection_service import RiskDetectionService
 from app.schemas.farm import ZoneUpdate, ZoneResponse
+from app.schemas.sensor_event import SensorEventFilter, SensorEventResponse
 from app.schemas.common import APIResponse
 
 router = APIRouter(prefix="/zones", tags=["Zones"])
@@ -63,3 +69,87 @@ async def update_zone(
         source="user",
     )
     return APIResponse(success=True, data=ZoneResponse.model_validate(updated), message="Zone updated successfully")
+
+
+@router.delete("/{zone_id}", response_model=APIResponse[bool])
+async def delete_zone(
+    zone_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """
+    Deletes a zone by ID.
+    Requires owner or manager role on the owning farm.
+    """
+    zone = await verify_zone_access(zone_id=zone_id, db=db, user=user)
+    await check_farm_access(
+        db,
+        farm_id=zone.farm_id,
+        user=user,
+        allowed_roles=["owner", "manager"],
+    )
+    farm_id = zone.farm_id
+    await ZoneService.delete_zone(db, zone_id=zone_id)
+    await AuditService.log_event(
+        session=db,
+        event_type="delete_zone",
+        entity_type="zone",
+        farm_id=farm_id,
+        entity_id=zone_id,
+        actor_id=user.id,
+        source="user",
+    )
+    return APIResponse(success=True, data=True, message="Zone deleted successfully")
+
+
+# ==============================================================================
+# ZONE READINGS (PRD: GET /api/v1/zones/{zoneId}/readings)
+# ==============================================================================
+
+@router.get("/{zone_id}/readings", response_model=APIResponse[List[SensorEventResponse]])
+async def get_zone_readings(
+    zone_id: str,
+    metric: Optional[str] = Query(None, description="Filter to a single metric, e.g. soil_moisture"),
+    start_time: Optional[datetime] = Query(None, description="Range start (ISO-8601 UTC)"),
+    end_time: Optional[datetime] = Query(None, description="Range end (ISO-8601 UTC)"),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """
+    Time series for one zone, with metric, unit, source, quality, event time and
+    received time on every point.
+
+    Readings are never synthesised: a zone with no telemetry returns an empty
+    series so the caller can render "no readings yet".
+    """
+    zone = await verify_zone_access(zone_id=zone_id, db=db, user=user)
+
+    filter_params = SensorEventFilter(
+        farm_id=zone.farm_id,
+        zone_id=zone_id,
+        metric=metric,
+        start_time=start_time,
+        end_time=end_time,
+        limit=limit,
+        offset=offset,
+    )
+    events = await SensorEventService.query_events(db, filter_params=filter_params)
+    latest = max((e.event_at for e in events), default=None)
+    now = datetime.now(timezone.utc)
+
+    return APIResponse(
+        success=True,
+        data=[SensorEventResponse.model_validate(e) for e in events],
+        message=f"Retrieved {len(events)} readings for zone." if events else "No readings recorded for this zone.",
+        meta={
+            "zone_id": zone_id,
+            "farm_id": zone.farm_id,
+            "count": len(events),
+            "limit": limit,
+            "offset": offset,
+            "latest_event_at": latest.isoformat() if latest else None,
+            "freshness": RiskDetectionService.calculate_freshness(latest, now),
+        },
+    )

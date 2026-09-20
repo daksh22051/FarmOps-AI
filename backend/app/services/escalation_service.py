@@ -30,11 +30,23 @@ class EscalationService:
     @staticmethod
     async def get_escalations(
         session: AsyncSession,
-        farm_id: str,
+        farm_id: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 50,
+        allowed_farm_ids: Optional[List[str]] = None,
     ) -> List[Escalation]:
-        query = select(Escalation).where(Escalation.farm_id == farm_id)
+        """Escalation cases, scoped to the caller's farms.
+
+        ``allowed_farm_ids`` is the tenant boundary used when no single farm is
+        named; ``None`` means unrestricted and is only correct for an admin.
+        """
+        query = select(Escalation)
+        if farm_id:
+            query = query.where(Escalation.farm_id == farm_id)
+        elif allowed_farm_ids is not None:
+            if not allowed_farm_ids:
+                return []
+            query = query.where(Escalation.farm_id.in_(allowed_farm_ids))
         if status:
             query = query.where(Escalation.status == status)
         query = query.order_by(desc(Escalation.created_at)).limit(limit)

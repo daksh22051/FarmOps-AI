@@ -5,10 +5,16 @@ import {
   getCurrentUser as apiGetCurrentUser,
   getFarms,
   getFarm,
+  createFarm as apiCreateFarm,
+  updateFarm as apiUpdateFarm,
+  deleteFarm as apiDeleteFarm,
   getZones,
+  createZone as apiCreateZone,
   updateZone as apiUpdateZone,
+  deleteZone as apiDeleteZone,
   getDevices,
   getTelemetryEvents,
+  simulateFarmTelemetry,
   getAlerts,
   getRisks,
   getTasks,
@@ -16,7 +22,7 @@ import {
 import { getCurrentSession, signOut as authSignOut } from "../lib/auth/session";
 import { createClient } from "../lib/supabase/client";
 import { ApiClientError } from "../lib/api/client";
-import type { Farm, Zone, ZoneUpdate, UserProfile, Device, SensorEventResponse, RiskAssessment, Task as BackendTask, Alert as BackendAlert } from "../types/api";
+import type { Farm, FarmCreate, FarmUpdate, Zone, ZoneCreate, ZoneUpdate, UserProfile, Device, SensorEventResponse, RiskAssessment, Task as BackendTask, Alert as BackendAlert } from "../types/api";
 import { extractLatestMeasurements, type LatestMeasurement } from "../lib/telemetry";
 import { resolveZoneName } from "../lib/risks";
 
@@ -436,8 +442,15 @@ export interface FarmContextType {
   refreshZones: () => Promise<void>;
   refreshDevices: () => Promise<void>;
   refreshTelemetry: () => Promise<void>;
+  refreshBackendState: () => Promise<void>;
+  triggerLiveTelemetry: (farmId?: string) => Promise<{ success: boolean; eventsGenerated?: number; error?: string }>;
   refreshAlertCount: () => Promise<void>;
+  createBackendFarm: (data: FarmCreate) => Promise<{ success: boolean; data?: Farm; error?: string }>;
+  updateBackendFarm: (farmId: string, data: FarmUpdate) => Promise<{ success: boolean; data?: Farm; error?: string }>;
+  deleteBackendFarm: (farmId: string) => Promise<{ success: boolean; error?: string }>;
+  addBackendZone: (farmId: string, data: ZoneCreate) => Promise<{ success: boolean; data?: Zone; error?: string }>;
   updateBackendZone: (zoneId: string, data: ZoneUpdate) => Promise<{ success: boolean; error?: string }>;
+  deleteBackendZone: (zoneId: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   
   // Computed helpers
@@ -817,6 +830,38 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
     }
   }, [selectedFarmId]);
 
+  const triggerLiveTelemetry = useCallback(
+    async (farmId?: string): Promise<{ success: boolean; eventsGenerated?: number; error?: string }> => {
+      const targetFarmId = farmId || selectedFarmId;
+      if (!targetFarmId) return { success: false, error: "No farm selected" };
+      setIsLoadingTelemetry(true);
+      setTelemetryError(null);
+      try {
+        const res = await simulateFarmTelemetry(targetFarmId, false);
+        const [eventsRes, devRes] = await Promise.all([
+          getTelemetryEvents(targetFarmId, { limit: 100 }),
+          getDevices(targetFarmId),
+        ]);
+        if (eventsRes.data) {
+          setTelemetryEvents(eventsRes.data);
+          setLatestTelemetry(extractLatestMeasurements(eventsRes.data));
+        }
+        if (devRes.data) {
+          setDevices(devRes.data);
+        }
+        return { success: true, eventsGenerated: res.data?.events_generated };
+      } catch (err: unknown) {
+        const msg =
+          err instanceof ApiClientError ? err.message : err instanceof Error ? err.message : "Failed to trigger live telemetry";
+        setTelemetryError(err instanceof Error ? err : new Error(msg));
+        return { success: false, error: msg };
+      } finally {
+        setIsLoadingTelemetry(false);
+      }
+    },
+    [selectedFarmId]
+  );
+
   const refreshAlertCount = useCallback(async () => {
     if (!selectedFarmId) return;
     try {
@@ -828,6 +873,91 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
       console.warn("Failed to refresh unacknowledged alert count:", err);
     }
   }, [selectedFarmId]);
+
+  const refreshBackendState = useCallback(async () => {
+    if (!selectedFarmId) return;
+    await Promise.allSettled([
+      refreshZones(),
+      refreshDevices(),
+      refreshTelemetry(),
+      refreshAlertCount(),
+    ]);
+  }, [selectedFarmId, refreshZones, refreshDevices, refreshTelemetry, refreshAlertCount]);
+
+  // Create backend farm
+  const createBackendFarm = useCallback(async (data: FarmCreate): Promise<{ success: boolean; data?: Farm; error?: string }> => {
+    try {
+      const res = await apiCreateFarm(data);
+      if (res.data) {
+        setBackendFarms((prev) => [res.data!, ...prev]);
+        await selectFarm(res.data.id);
+        return { success: true, data: res.data };
+      }
+      return { success: false, error: res.message || "Failed to create farm" };
+    } catch (err: unknown) {
+      const msg = err instanceof ApiClientError ? err.message : (err instanceof Error ? err.message : "Failed to create farm");
+      return { success: false, error: msg };
+    }
+  }, [selectFarm]);
+
+  // Update backend farm directly
+  const updateBackendFarm = useCallback(async (farmId: string, data: FarmUpdate): Promise<{ success: boolean; data?: Farm; error?: string }> => {
+    try {
+      const res = await apiUpdateFarm(farmId, data);
+      if (res.data) {
+        setBackendFarms((prev) => prev.map((f) => (f.id === farmId ? res.data! : f)));
+        if (selectedFarmId === farmId) {
+          setSelectedFarm(res.data);
+        }
+        return { success: true, data: res.data };
+      }
+      return { success: false, error: res.message || "Failed to update farm" };
+    } catch (err: unknown) {
+      const msg = err instanceof ApiClientError ? err.message : (err instanceof Error ? err.message : "Failed to update farm");
+      return { success: false, error: msg };
+    }
+  }, [selectedFarmId]);
+
+  // Delete backend farm directly
+  const deleteBackendFarm = useCallback(async (farmId: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await apiDeleteFarm(farmId);
+      if (res.success) {
+        const remaining = backendFarms.filter((f) => f.id !== farmId);
+        setBackendFarms(remaining);
+        if (selectedFarmId === farmId) {
+          if (remaining.length > 0) {
+            await selectFarm(remaining[0].id);
+          } else {
+            setSelectedFarmId(null);
+            setSelectedFarm(null);
+            setBackendZones([]);
+            setDevices([]);
+          }
+        }
+        return { success: true };
+      }
+      return { success: false, error: res.message || "Failed to delete farm" };
+    } catch (err: unknown) {
+      const msg = err instanceof ApiClientError ? err.message : (err instanceof Error ? err.message : "Failed to delete farm");
+      return { success: false, error: msg };
+    }
+  }, [backendFarms, selectedFarmId, selectFarm]);
+
+  // Add backend zone directly
+  const addBackendZone = useCallback(async (farmId: string, data: ZoneCreate): Promise<{ success: boolean; data?: Zone; error?: string }> => {
+    try {
+      const res = await apiCreateZone(farmId, data);
+      if (res.data) {
+        setBackendZones((prev) => [res.data!, ...prev]);
+        return { success: true, data: res.data };
+      }
+      return { success: false, error: res.message || "Failed to add zone" };
+    } catch (err: unknown) {
+      const msg = err instanceof ApiClientError ? err.message : (err instanceof Error ? err.message : "Failed to add zone");
+      return { success: false, error: msg };
+    }
+  }, []);
 
   // Update backend zone directly
   const updateBackendZone = useCallback(async (zoneId: string, data: ZoneUpdate): Promise<{ success: boolean; error?: string }> => {
@@ -843,6 +973,22 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
       return { success: false, error: msg };
     }
   }, []);
+
+  // Delete backend zone directly
+  const deleteBackendZone = useCallback(async (zoneId: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await apiDeleteZone(zoneId);
+      if (res.success) {
+        setBackendZones((prev) => prev.filter((z) => z.id !== zoneId));
+        return { success: true };
+      }
+      return { success: false, error: res.message || "Failed to delete zone" };
+    } catch (err: unknown) {
+      const msg = err instanceof ApiClientError ? err.message : (err instanceof Error ? err.message : "Failed to delete zone");
+      return { success: false, error: msg };
+    }
+  }, []);
+
 
   // Logout
   const logout = useCallback(async () => {
@@ -1539,8 +1685,15 @@ export function FarmProvider({ children }: { children: React.ReactNode }) {
         refreshZones,
         refreshDevices,
         refreshTelemetry,
+        refreshBackendState,
+        triggerLiveTelemetry,
         refreshAlertCount,
+        createBackendFarm,
+        updateBackendFarm,
+        deleteBackendFarm,
+        addBackendZone,
         updateBackendZone,
+        deleteBackendZone,
         logout,
         totalAreaHa,
         activeZoneCount,

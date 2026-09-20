@@ -4,7 +4,7 @@ Domain schemas for action plan generation, deterministic safety gating, and huma
 """
 
 from typing import Optional, Dict, Any, List, Literal
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.schemas.ai import AIProposal
@@ -50,12 +50,35 @@ class ActionPlanCreate(BaseModel):
     evidence: Optional[Dict[str, Any]] = Field(None, description="Supporting telemetry and agronomic evidence")
     source: Optional[str] = Field("ai_agent", description="Creator source: ai_agent, user, rule_engine")
     ai_proposal: Optional[AIProposal] = Field(None, description="Raw AIProposal from Gemini/domain agent")
+    earliest_at: Optional[datetime] = None
+    latest_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def validate_schedule(self):
+        for field in ("earliest_at", "latest_at"):
+            value = getattr(self, field)
+            if value is not None and value.tzinfo is None:
+                setattr(self, field, value.replace(tzinfo=timezone.utc))
+        if self.earliest_at and self.latest_at and self.latest_at < self.earliest_at:
+            raise ValueError("The end of the action window must be after its start.")
+        return self
 
 
 class ActionPlanApprovalRequest(BaseModel):
     decision: Optional[Literal["approved", "rejected"]] = Field("approved", description="Reviewer decision")
     review_notes: Optional[str] = Field(None, description="Reviewer comments")
     notes: Optional[str] = Field(None, description="Alternative field for review notes")
+
+
+class ActionPlanDecisionRequest(BaseModel):
+    """A farmer's decision on a proposed plan (PRD: POST /plans/{planId}/decision)."""
+
+    decision: Literal["approve", "reject", "reschedule"] = Field(
+        ..., description="approve | reject | reschedule"
+    )
+    reason: Optional[str] = Field(None, max_length=2000, description="Why this decision was taken")
+    earliest_at: Optional[datetime] = Field(None, description="New window start; reschedule only")
+    latest_at: Optional[datetime] = Field(None, description="New window end; reschedule only")
 
 
 class ActionPlanResponse(BaseModel):
@@ -78,8 +101,12 @@ class ActionPlanResponse(BaseModel):
     confidence: float
     evidence: Optional[Dict[str, Any]] = None
     estimated_cost: Optional[float] = None
+    # The PRD requires cost to be explicitly "unknown" rather than silently null, so the
+    # UI can distinguish "we costed this at zero" from "we have no basis for a figure".
+    estimated_cost_status: str = "unknown"
+    estimated_cost_currency: str = "INR"
     estimated_duration_minutes: Optional[int] = None
-    
+
     safety_flags: Optional[List[str]] = None
     approval_required: bool
     requires_human_approval: Optional[bool] = None
@@ -107,6 +134,8 @@ class ActionPlanResponse(BaseModel):
                 data["requires_human_approval"] = data.get("approval_required")
             if "safety_status" not in data or data["safety_status"] is None:
                 data["safety_status"] = data.get("policy_decision")
+            if not data.get("estimated_cost_status"):
+                data["estimated_cost_status"] = "known" if data.get("estimated_cost") is not None else "unknown"
             if "title" not in data or not data["title"]:
                 data["title"] = data.get("action_summary") or data.get("action_type")
             return data
@@ -136,6 +165,8 @@ class ActionPlanResponse(BaseModel):
             "confidence": getattr(data, "confidence", 1.0),
             "evidence": evidence,
             "estimated_cost": getattr(data, "estimated_cost", None),
+            "estimated_cost_status": "known" if getattr(data, "estimated_cost", None) is not None else "unknown",
+            "estimated_cost_currency": evidence.get("cost_currency") or "INR",
             "estimated_duration_minutes": evidence.get("estimated_duration_minutes"),
             "safety_flags": getattr(data, "safety_flags", None),
             "approval_required": approval_required,

@@ -1,11 +1,13 @@
 """
 Deterministic Agronomic Risk Detection & Risk Assessment Engine
-Evaluates sensor telemetry events and external observations to detect:
+Evaluates real sensor telemetry events and external observations to detect:
 - WATER_STRESS
 - PEST_DISEASE_RISK
 - NUTRIENT_DEFICIENCY
+- WEATHER_ENVIRONMENTAL
 
 Outputs explainable, traceable, and deduplicated RiskAssessment domain records.
+Missing or offline telemetry NEVER generates synthetic/mock risks.
 """
 
 from typing import List, Optional, Dict, Any, Tuple
@@ -53,10 +55,13 @@ NUTRIENT_K_CRITICAL = 10.0                     # mg/kg Severe Potassium deficien
 SOIL_PH_ACIDIC = 5.5                           # pH threshold below which nutrient uptake is locked
 SOIL_PH_ALKALINE = 8.0                         # pH threshold above which micronutrients are locked
 
-# Telemetry Data Freshness Windows (Hours)
-FRESH_THRESHOLD_HOURS = 2.0
-STALE_THRESHOLD_HOURS = 12.0
-VERY_STALE_THRESHOLD_HOURS = 24.0
+# Telemetry Data Freshness Windows (configurable, in minutes).
+# One ladder shared by the risk engine, the dashboard and the frontend badges so a
+# reading is never described as "active" in one view and "offline" in another.
+FRESH_THRESHOLD_MINUTES = 15.0                 # <= 15 mins: current
+STALE_THRESHOLD_MINUTES = 360.0                # <= 6 hours: stale but usable as last-known
+VERY_STALE_THRESHOLD_MINUTES = 2880.0          # <= 48 hours: very stale, treat with low confidence
+# beyond 48 hours, or no reading at all: offline
 
 
 class DetectedRisk:
@@ -84,23 +89,23 @@ class DetectedRisk:
 class RiskDetectionService:
     """
     Deterministic agronomic evaluation engine.
-    Calculates water stress, pest/disease risk, and nutrient deficiency indicators.
+    Calculates water stress, pest/disease risk, nutrient deficiency, and environmental hazards.
     """
 
     @staticmethod
     def calculate_freshness(event_timestamp: Optional[datetime], now_utc: datetime) -> str:
         if not event_timestamp:
-            return "very_stale"
+            return "offline"
         if event_timestamp.tzinfo is None:
             event_timestamp = event_timestamp.replace(tzinfo=timezone.utc)
-        age_hours = (now_utc - event_timestamp).total_seconds() / 3600.0
-        if age_hours <= FRESH_THRESHOLD_HOURS:
+        age_minutes = (now_utc - event_timestamp).total_seconds() / 60.0
+        if age_minutes <= FRESH_THRESHOLD_MINUTES:
             return "fresh"
-        if age_hours <= STALE_THRESHOLD_HOURS:
-            return "moderate"
-        if age_hours <= VERY_STALE_THRESHOLD_HOURS:
+        if age_minutes <= STALE_THRESHOLD_MINUTES:
             return "stale"
-        return "very_stale"
+        if age_minutes <= VERY_STALE_THRESHOLD_MINUTES:
+            return "very_stale"
+        return "offline"
 
     @classmethod
     def detect_water_stress(
@@ -113,7 +118,6 @@ class RiskDetectionService:
         """
         Evaluates soil moisture levels, historical moisture trends, and ambient environmental stress.
         """
-        # 1. Extract soil moisture
         soil_moisture_val = latest_telemetry.get("soil_moisture")
         if soil_moisture_val is None:
             soil_moisture_val = latest_telemetry.get("moisture")
@@ -130,7 +134,6 @@ class RiskDetectionService:
         if soil_moisture > WATER_STRESS_SOIL_MOISTURE_LOW_RISK:
             return None
 
-        # 2. Extract ambient environmental stress signals
         temperature_val = latest_telemetry.get("air_temperature") or latest_telemetry.get("temperature") or latest_telemetry.get("temp")
         humidity_val = latest_telemetry.get("air_humidity") or latest_telemetry.get("humidity")
         rainfall_val = latest_telemetry.get("rainfall") or latest_telemetry.get("precipitation") or latest_telemetry.get("rain")
@@ -149,7 +152,7 @@ class RiskDetectionService:
 
         total_recent_rain = max(rain, recent_rain_obs)
 
-        # 3. Check historical trend from lookback readings
+        # Check historical trend from lookback readings
         moisture_series: List[float] = []
         for ev in telemetry_history[:WATER_STRESS_LOOKBACK_EVENTS]:
             m = (ev.measurements or {}).get("soil_moisture")
@@ -161,13 +164,11 @@ class RiskDetectionService:
 
         has_declining_trend = False
         if len(moisture_series) >= 3:
-            # Check if recent values are steadily dropping
             has_declining_trend = all(
                 moisture_series[i] <= moisture_series[i + 1]
                 for i in range(min(3, len(moisture_series) - 1))
             )
 
-        # 4. Determine Rules & Severity
         rules_triggered: List[str] = ["low_soil_moisture"]
         signals_list: List[Dict[str, Any]] = [
             {"name": "soil_moisture", "value": soil_moisture, "unit": "%", "threshold": WATER_STRESS_SOIL_MOISTURE_LOW_RISK}
@@ -212,11 +213,11 @@ class RiskDetectionService:
             else:
                 severity = "medium"
                 score = 0.50
-        else:  # 30.0 < soil_moisture <= 35.0
+        else:
             severity = "low"
             score = 0.35
 
-        # 5. Deterministic Confidence Calculation
+        # Confidence Calculation
         base_confidence = 0.70
         if high_temp and low_humidity:
             base_confidence += 0.15
@@ -226,15 +227,16 @@ class RiskDetectionService:
         if has_declining_trend:
             base_confidence += 0.10
 
-        # Freshness adjustment
         latest_event_ts = telemetry_history[0].event_at if telemetry_history else now_utc
         freshness = cls.calculate_freshness(latest_event_ts, now_utc)
         if freshness == "fresh":
             base_confidence += 0.05
         elif freshness == "stale":
-            base_confidence -= 0.20
+            base_confidence -= 0.15
         elif freshness == "very_stale":
-            base_confidence -= 0.40
+            base_confidence -= 0.25
+        elif freshness == "offline":
+            base_confidence -= 0.35
 
         confidence = max(0.15, min(0.98, base_confidence))
 
@@ -279,7 +281,6 @@ class RiskDetectionService:
     ) -> Optional[DetectedRisk]:
         """
         Evaluates microclimate favorability for fungal & bacterial disease proliferation.
-        Outputs explainable risk probability without making definitive medical diagnoses.
         """
         humidity_val = latest_telemetry.get("air_humidity") or latest_telemetry.get("humidity")
         temperature_val = latest_telemetry.get("air_temperature") or latest_telemetry.get("temperature") or latest_telemetry.get("temp")
@@ -289,7 +290,6 @@ class RiskDetectionService:
         temperature = float(temperature_val) if temperature_val is not None else None
         rainfall = float(rainfall_val) if rainfall_val is not None else 0.0
 
-        # Check external observations (weather forecast, drone, satellite)
         obs_humidity = None
         obs_rain = 0.0
         obs_pest_alert = False
@@ -308,7 +308,6 @@ class RiskDetectionService:
         if effective_humidity is None and temperature is None:
             return None
 
-        # Check conditions
         rules_triggered: List[str] = []
         signals_list: List[Dict[str, Any]] = []
 
@@ -335,7 +334,6 @@ class RiskDetectionService:
         if obs_pest_alert:
             rules_triggered.append("external_pest_surveillance_alert")
 
-        # Evaluate severity
         favorable_factors = len(rules_triggered)
         if favorable_factors == 0:
             return None
@@ -359,7 +357,6 @@ class RiskDetectionService:
         else:
             return None
 
-        # Confidence calculation
         base_confidence = 0.45
         if favorable_factors >= 3:
             base_confidence += 0.35
@@ -373,8 +370,10 @@ class RiskDetectionService:
         if freshness == "fresh":
             base_confidence += 0.08
         elif freshness == "stale":
-            base_confidence -= 0.20
+            base_confidence -= 0.15
         elif freshness == "very_stale":
+            base_confidence -= 0.25
+        elif freshness == "offline":
             base_confidence -= 0.35
 
         confidence = max(0.15, min(0.95, base_confidence))
@@ -416,14 +415,12 @@ class RiskDetectionService:
         """
         Evaluates N, P, K and soil pH telemetry readings when available.
         Does NOT trigger if N/P/K telemetry is missing.
-        Does NOT invent fertilizer dosage or recommend application quantities.
         """
         nitrogen_val = latest_telemetry.get("nitrogen") or latest_telemetry.get("soil_nitrogen") or latest_telemetry.get("n")
         phosphorus_val = latest_telemetry.get("phosphorus") or latest_telemetry.get("soil_phosphorus") or latest_telemetry.get("p")
         potassium_val = latest_telemetry.get("potassium") or latest_telemetry.get("soil_potassium") or latest_telemetry.get("k")
         ph_val = latest_telemetry.get("soil_ph") or latest_telemetry.get("ph")
 
-        # If NO nutrient telemetry is present at all, do NOT create assessment
         if nitrogen_val is None and phosphorus_val is None and potassium_val is None and ph_val is None:
             return None
 
@@ -431,7 +428,6 @@ class RiskDetectionService:
         signals_list: List[Dict[str, Any]] = []
         deficient_nutrients: List[str] = []
 
-        # Check Nitrogen
         if nitrogen_val is not None:
             try:
                 n = float(nitrogen_val)
@@ -442,7 +438,6 @@ class RiskDetectionService:
             except (ValueError, TypeError):
                 pass
 
-        # Check Phosphorus
         if phosphorus_val is not None:
             try:
                 p = float(phosphorus_val)
@@ -453,7 +448,6 @@ class RiskDetectionService:
             except (ValueError, TypeError):
                 pass
 
-        # Check Potassium
         if potassium_val is not None:
             try:
                 k = float(potassium_val)
@@ -464,7 +458,6 @@ class RiskDetectionService:
             except (ValueError, TypeError):
                 pass
 
-        # Check pH
         if ph_val is not None:
             try:
                 ph = float(ph_val)
@@ -474,11 +467,9 @@ class RiskDetectionService:
             except (ValueError, TypeError):
                 pass
 
-        # If all measured nutrients are within healthy ranges, no risk
         if not rules_triggered:
             return None
 
-        # Severity
         if len(deficient_nutrients) >= 3 or ("low_soil_nitrogen" in rules_triggered and any(s["value"] < NUTRIENT_N_CRITICAL for s in signals_list if s["name"] == "nitrogen")):
             severity = "high"
             score = 0.80
@@ -489,7 +480,6 @@ class RiskDetectionService:
             severity = "low"
             score = 0.40
 
-        # Confidence
         base_confidence = 0.75
         if len(signals_list) >= 2:
             base_confidence += 0.10
@@ -497,12 +487,13 @@ class RiskDetectionService:
         latest_event_ts = telemetry_history[0].event_at if telemetry_history else now_utc
         freshness = cls.calculate_freshness(latest_event_ts, now_utc)
         if freshness == "stale":
-            base_confidence -= 0.20
+            base_confidence -= 0.15
         elif freshness == "very_stale":
-            base_confidence -= 0.40
+            base_confidence -= 0.25
+        elif freshness == "offline":
+            base_confidence -= 0.35
 
         confidence = max(0.20, min(0.95, base_confidence))
-
         nutrient_names = ", ".join(deficient_nutrients) if deficient_nutrients else "soil bioavailability (pH)"
         explanation = f"Nutrient deficiency risk detected: suboptimal levels for {nutrient_names}."
 
@@ -527,6 +518,99 @@ class RiskDetectionService:
             agent="nutrient_detector",
         )
 
+    @classmethod
+    def detect_weather_environmental_risk(
+        cls,
+        latest_telemetry: Dict[str, Any],
+        observations: List[ExternalObservation],
+        telemetry_history: List[SensorEvent],
+        now_utc: datetime,
+    ) -> Optional[DetectedRisk]:
+        """
+        Evaluates ambient environmental extremes including heatwaves, frost danger, and severe winds.
+        """
+        temp_val = latest_telemetry.get("air_temperature") or latest_telemetry.get("temperature") or latest_telemetry.get("temp")
+        wind_val = latest_telemetry.get("wind_speed") or latest_telemetry.get("wind") or latest_telemetry.get("gust_speed")
+        humidity_val = latest_telemetry.get("air_humidity") or latest_telemetry.get("humidity")
+
+        temp = float(temp_val) if temp_val is not None else None
+        wind = float(wind_val) if wind_val is not None else None
+        humidity = float(humidity_val) if humidity_val is not None else None
+
+        for obs in observations:
+            if obs.type in ["weather_forecast", "weather_observation"]:
+                p = obs.payload or {}
+                if temp is None and "temperature" in p:
+                    temp = float(p["temperature"])
+                if wind is None and "wind_speed" in p:
+                    wind = float(p["wind_speed"])
+
+        if temp is None and wind is None:
+            return None
+
+        rules_triggered: List[str] = []
+        signals_list: List[Dict[str, Any]] = []
+
+        is_heat_extreme = temp is not None and temp >= 38.0
+        is_frost_danger = temp is not None and temp <= 4.0
+        is_gale_wind = wind is not None and wind >= 40.0
+
+        if is_heat_extreme:
+            rules_triggered.append("extreme_ambient_heat_stress")
+            signals_list.append({"name": "air_temperature", "value": temp, "unit": "°C", "threshold": 38.0})
+        elif is_frost_danger:
+            rules_triggered.append("frost_freeze_temperature_hazard")
+            signals_list.append({"name": "air_temperature", "value": temp, "unit": "°C", "threshold": 4.0})
+
+        if is_gale_wind:
+            rules_triggered.append("high_velocity_wind_hazard")
+            signals_list.append({"name": "wind_speed", "value": wind, "unit": "km/h", "threshold": 40.0})
+
+        if not rules_triggered:
+            return None
+
+        if (is_heat_extreme and temp and temp >= 42.0) or (is_frost_danger and temp and temp <= 1.0) or (is_gale_wind and wind and wind >= 55.0):
+            severity = "critical"
+            score = 0.90
+        elif is_heat_extreme or is_frost_danger or is_gale_wind:
+            severity = "high"
+            score = 0.75
+        else:
+            severity = "medium"
+            score = 0.50
+
+        latest_event_ts = telemetry_history[0].event_at if telemetry_history else now_utc
+        freshness = cls.calculate_freshness(latest_event_ts, now_utc)
+
+        explanation = (
+            f"Severe weather hazard: "
+            + (f"Critical heatwave ({temp}°C) " if is_heat_extreme else "")
+            + (f"Sub-zero/frost risk ({temp}°C) " if is_frost_danger else "")
+            + (f"High wind gale ({wind} km/h)" if is_gale_wind else "")
+        ).strip()
+
+        evidence = {
+            "signals": signals_list,
+            "rules_triggered": rules_triggered,
+            "freshness": freshness,
+            "explanation": explanation,
+            "context": {
+                "air_temperature_c": temp,
+                "wind_speed_kmh": wind,
+                "humidity_pct": humidity,
+            },
+        }
+
+        return DetectedRisk(
+            risk_type="weather_environmental",
+            severity=severity,
+            score=score,
+            confidence=0.85,
+            evidence=evidence,
+            missing_information=[],
+            agent="weather_environmental_detector",
+        )
+
     # =====================================================================
     # EVALUATION & LIFECYCLE MANAGEMENT (DEDUPLICATION / PERSISTENCE)
     # =====================================================================
@@ -547,12 +631,20 @@ class RiskDetectionService:
         now_utc = datetime.now(timezone.utc)
 
         # 1. Fetch recent telemetry history
-        query = select(SensorEvent).where(SensorEvent.farm_id == farm_id)
-        if zone_id:
-            query = query.where(SensorEvent.zone_id == zone_id)
+        query = select(SensorEvent).where(
+            SensorEvent.farm_id == farm_id,
+            SensorEvent.zone_id == zone_id,
+            SensorEvent.quality == "good",
+            SensorEvent.is_duplicate.is_(False),
+            SensorEvent.event_at <= now_utc,
+        )
         query = query.order_by(desc(SensorEvent.event_at)).limit(20)
         res = await session.execute(query)
         telemetry_history = list(res.scalars().all())
+
+        # If NO telemetry history and NO override, do not invent speculative risks
+        if not telemetry_history and not telemetry_override:
+            return []
 
         # Construct latest telemetry dictionary
         latest_telemetry: Dict[str, Any] = {}
@@ -606,11 +698,19 @@ class RiskDetectionService:
         if nutrient_risk:
             detected_risks.append(nutrient_risk)
 
+        weather_risk = cls.detect_weather_environmental_risk(
+            latest_telemetry=latest_telemetry,
+            observations=observations,
+            telemetry_history=telemetry_history,
+            now_utc=now_utc,
+        )
+        if weather_risk:
+            detected_risks.append(weather_risk)
+
         # 4. Deduplicate and persist / update lifecycle
         persisted_risks: List[RiskAssessment] = []
 
         for detected in detected_risks:
-            # Query for an existing OPEN or ACKNOWLEDGED risk assessment
             existing_query = select(RiskAssessment).where(
                 RiskAssessment.farm_id == farm_id,
                 RiskAssessment.zone_id == zone_id,
@@ -621,7 +721,6 @@ class RiskDetectionService:
             existing_risk = existing_res.scalar_one_or_none()
 
             if existing_risk:
-                # Update existing record in-place to avoid duplicate rows
                 old_severity = existing_risk.severity
                 old_status = existing_risk.status
 
@@ -634,7 +733,6 @@ class RiskDetectionService:
                 existing_risk.agent_version = detected.agent_version
                 existing_risk.updated_at = now_utc
 
-                # Only emit audit event if severity changed
                 if old_severity != detected.severity:
                     await AuditService.log_event(
                         session=session,
@@ -649,7 +747,6 @@ class RiskDetectionService:
                     )
                 persisted_risks.append(existing_risk)
             else:
-                # Create brand new risk assessment
                 new_risk = RiskAssessment(
                     farm_id=farm_id,
                     zone_id=zone_id,
@@ -683,10 +780,52 @@ class RiskDetectionService:
                 )
                 persisted_risks.append(new_risk)
 
-        await session.commit()
-        for r in persisted_risks:
-            await session.refresh(r)
+        # 5. Auto-resolve risks when fresh measurements return to healthy ranges
+        fresh_keys = set(telemetry_override or {})
+        for event in telemetry_history:
+            event_time = event.event_at.replace(tzinfo=timezone.utc) if event.event_at.tzinfo is None else event.event_at
+            if now_utc - event_time <= timedelta(minutes=STALE_THRESHOLD_MINUTES):
+                fresh_keys.update((event.measurements or {event.metric: event.value}).keys())
 
+        evaluated = set()
+        if any(k in fresh_keys for k in ("soil_moisture", "moisture")):
+            evaluated.add("water_stress")
+        if any(k in fresh_keys for k in ("humidity", "air_humidity")) and any(k in fresh_keys for k in ("temperature", "air_temperature")):
+            evaluated.add("pest_disease")
+        if all(k in fresh_keys for k in ("nitrogen", "phosphorus", "potassium", "ph")):
+            evaluated.add("nutrient_deficiency")
+        if any(k in fresh_keys for k in ("temperature", "air_temperature", "wind_speed")):
+            evaluated.add("weather_environmental")
+
+        detected_types = {risk.risk_type for risk in detected_risks}
+        if evaluated - detected_types:
+            recovered = (await session.scalars(select(RiskAssessment).where(
+                RiskAssessment.farm_id == farm_id,
+                RiskAssessment.zone_id == zone_id,
+                RiskAssessment.status.in_(["open", "acknowledged"]),
+                RiskAssessment.risk_type.in_(evaluated - detected_types),
+                RiskAssessment.agent.in_([
+                    "water_stress_detector",
+                    "pest_disease_detector",
+                    "nutrient_detector",
+                    "weather_environmental_detector",
+                ]),
+            ))).all()
+            for risk in recovered:
+                risk.status = "resolved"
+                risk.updated_at = now_utc
+                await AuditService.log_event(
+                    session=session,
+                    event_type="risk_resolved",
+                    entity_type="risk_assessment",
+                    farm_id=farm_id,
+                    entity_id=risk.id,
+                    actor_id=actor_id,
+                    after_state={"status": "resolved", "reason": "fresh_measurements_normalized"},
+                    source="rule_engine",
+                )
+
+        await session.commit()
         return persisted_risks
 
     @classmethod
@@ -700,7 +839,6 @@ class RiskDetectionService:
         """
         Evaluates farm-level and all zone-level risks for a given farm.
         """
-        # Get all zones for this farm
         zones_res = await session.execute(select(Zone).where(Zone.farm_id == farm_id))
         zones = list(zones_res.scalars().all())
 

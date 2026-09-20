@@ -25,7 +25,7 @@ export const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/onboarding", label: "Setup New Farm", icon: PlusCircle },
   { href: "/farm", label: "Farms", icon: Home },
-  { href: "/farm?tab=zones", label: "Zones", icon: Layers },
+  { href: "/zones", label: "Zones", icon: Layers },
   { href: "/risks", label: "Risks", icon: ShieldAlert },
   { href: "/plans", label: "Action Plans", icon: ClipboardCheck },
   { href: "/tasks", label: "Tasks", icon: ListTodo },

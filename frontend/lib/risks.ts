@@ -28,6 +28,8 @@ export function formatRiskType(rawType: string): string {
 export interface SeverityStyle {
   label: string;
   badgeClass: string;
+  badge: string;
+  dot: string;
   cardBorderClass: string;
   cardBgClass: string;
   iconColorClass: string;
@@ -41,6 +43,8 @@ export function getSeverityStyle(severity?: string): SeverityStyle {
       return {
         label: "Critical",
         badgeClass: "bg-red-100 text-red-800 border border-red-200",
+        badge: "bg-red-100 text-red-800 border-red-200",
+        dot: "bg-red-500",
         cardBorderClass: "border-red-200",
         cardBgClass: "bg-red-50/30",
         iconColorClass: "text-red-700",
@@ -49,6 +53,8 @@ export function getSeverityStyle(severity?: string): SeverityStyle {
       return {
         label: "High",
         badgeClass: "bg-rose-100 text-rose-800 border border-rose-200",
+        badge: "bg-rose-100 text-rose-800 border-rose-200",
+        dot: "bg-rose-500",
         cardBorderClass: "border-rose-200",
         cardBgClass: "bg-rose-50/20",
         iconColorClass: "text-rose-600",
@@ -58,6 +64,8 @@ export function getSeverityStyle(severity?: string): SeverityStyle {
       return {
         label: "Medium",
         badgeClass: "bg-amber-100 text-amber-800 border border-amber-200",
+        badge: "bg-amber-100 text-amber-800 border-amber-200",
+        dot: "bg-amber-500",
         cardBorderClass: "border-amber-200",
         cardBgClass: "bg-amber-50/20",
         iconColorClass: "text-amber-600",
@@ -67,6 +75,8 @@ export function getSeverityStyle(severity?: string): SeverityStyle {
       return {
         label: "Low",
         badgeClass: "bg-emerald-100 text-emerald-800 border border-emerald-200",
+        badge: "bg-emerald-100 text-emerald-800 border-emerald-200",
+        dot: "bg-emerald-500",
         cardBorderClass: "border-emerald-200",
         cardBgClass: "bg-emerald-50/20",
         iconColorClass: "text-emerald-600",

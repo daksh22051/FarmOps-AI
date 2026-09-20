@@ -48,6 +48,7 @@ export function TelemetryOverview() {
     isLoadingTelemetry,
     telemetryError,
     refreshTelemetry,
+    triggerLiveTelemetry,
   } = useFarm();
 
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -55,7 +56,11 @@ export function TelemetryOverview() {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
-      await refreshTelemetry();
+      if (!hasTelemetry && selectedFarmId) {
+        await triggerLiveTelemetry(selectedFarmId);
+      } else {
+        await refreshTelemetry();
+      }
     } finally {
       setIsRefreshing(false);
     }
@@ -83,18 +88,34 @@ export function TelemetryOverview() {
           </div>
 
           {isSelected && (
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={isRefreshing || isLoadingTelemetry}
-              className="inline-flex items-center gap-1.5 self-start sm:self-auto rounded-xl border border-[#dfe6dd] bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 disabled:opacity-50"
-            >
-              <RefreshCw
-                size={13}
-                className={isRefreshing || isLoadingTelemetry ? "animate-spin text-forest-700" : "text-slate-500"}
-              />
-              <span>Refresh Sensors</span>
-            </button>
+            <div className="flex items-center gap-2">
+              {!hasTelemetry && (
+                <button
+                  type="button"
+                  onClick={handleRefresh}
+                  disabled={isRefreshing || isLoadingTelemetry}
+                  className="inline-flex items-center gap-1.5 self-start sm:self-auto rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-3 py-1.5 text-xs font-bold text-white shadow-xs hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50"
+                >
+                  <RefreshCw
+                    size={12}
+                    className={isRefreshing || isLoadingTelemetry ? "animate-spin" : ""}
+                  />
+                  <span>⚡ Connect Live Sensors</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={isRefreshing || isLoadingTelemetry}
+                className="inline-flex items-center gap-1.5 self-start sm:self-auto rounded-xl border border-[#dfe6dd] bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 disabled:opacity-50"
+              >
+                <RefreshCw
+                  size={13}
+                  className={isRefreshing || isLoadingTelemetry ? "animate-spin text-forest-700" : "text-slate-500"}
+                />
+                <span>Refresh Sensors</span>
+              </button>
+            </div>
           )}
         </div>
 

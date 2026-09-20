@@ -11,6 +11,7 @@ from app.core.security import (
     AuthUser,
     check_farm_access,
     verify_escalation_access,
+    get_accessible_farm_ids,
 )
 from app.services.escalation_service import EscalationService
 from app.schemas.escalation import EscalationCreate, EscalationReviewRequest, EscalationResponse
@@ -29,6 +30,36 @@ async def create_escalation(
     await check_farm_access(db, farm_id=payload.farm_id, user=user)
     esc = await EscalationService.create_escalation(db, data=payload)
     return APIResponse(success=True, data=EscalationResponse.model_validate(esc), message="Escalation opened")
+
+
+@router.get("", response_model=APIResponse[List[EscalationResponse]])
+async def list_all_escalations(
+    farm_id: Optional[str] = Query(None, description="Restrict to one farm"),
+    status: Optional[str] = Query(None, description="Filter: open, in_review, resolved, rejected"),
+    limit: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """
+    Escalation queue for the signed-in expert or owner.
+
+    Returns only cases on farms the caller belongs to; it is never a global list.
+    """
+    allowed = None
+    if farm_id:
+        await check_farm_access(db, farm_id=farm_id, user=user)
+    else:
+        allowed = await get_accessible_farm_ids(db, user)
+
+    items = await EscalationService.get_escalations(
+        db, farm_id=farm_id, status=status, limit=limit, allowed_farm_ids=allowed
+    )
+    return APIResponse(
+        success=True,
+        data=[EscalationResponse.model_validate(e) for e in items],
+        message=f"Retrieved {len(items)} escalation case(s).",
+        meta={"count": len(items), "limit": limit},
+    )
 
 
 @router.get("/{farm_id}", response_model=APIResponse[List[EscalationResponse]])

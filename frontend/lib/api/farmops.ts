@@ -89,6 +89,10 @@ export async function updateZone(zoneId: string, data: ZoneUpdate, options?: Req
   return apiClient.patch<Zone>(`/zones/${zoneId}`, data, options);
 }
 
+export async function deleteZone(zoneId: string, options?: RequestOptions): Promise<APIResponse<boolean>> {
+  return apiClient.delete<boolean>(`/zones/${zoneId}`, options);
+}
+
 // ==========================================
 // 4. DEVICES
 // ==========================================
@@ -107,6 +111,10 @@ export async function getDevice(deviceId: string, options?: RequestOptions): Pro
 
 export async function updateDevice(deviceId: string, data: DeviceUpdate, options?: RequestOptions): Promise<APIResponse<Device>> {
   return apiClient.patch<Device>(`/devices/${deviceId}`, data, options);
+}
+
+export async function deleteDevice(deviceId: string, options?: RequestOptions): Promise<APIResponse<boolean>> {
+  return apiClient.delete<boolean>(`/devices/${deviceId}`, options);
 }
 
 // ==========================================
@@ -137,6 +145,24 @@ export async function createTelemetryEvent(
   options?: RequestOptions
 ): Promise<APIResponse<TelemetryEventResponse>> {
   return apiClient.post<TelemetryEventResponse>("/telemetry/events", data, options);
+}
+
+export async function simulateFarmTelemetry(
+  farmId: string,
+  seedHistory: boolean = false,
+  options?: RequestOptions
+): Promise<APIResponse<{ farm_id: string; events_generated: number; timestamp: string }>> {
+  return apiClient.post<{ farm_id: string; events_generated: number; timestamp: string }>(
+    `/telemetry/${farmId}/simulate?seed_history=${seedHistory}`,
+    {},
+    options
+  );
+}
+
+export async function simulateAllTelemetry(
+  options?: RequestOptions
+): Promise<APIResponse<Record<string, number>>> {
+  return apiClient.post<Record<string, number>>("/telemetry/simulate-all", {}, options);
 }
 
 // ==========================================
@@ -244,12 +270,37 @@ export async function createActionPlan(
   return apiClient.post<ActionPlan>("/action-plans", data, options);
 }
 
+/**
+ * The farmer's decision on a proposed plan. `reschedule` returns the plan to
+ * `pending_approval` with a new execution window and a bumped version, so the
+ * earlier proposal stays in the audit trail rather than being overwritten.
+ */
+export type PlanDecision = {
+  decision: "approve" | "reject" | "reschedule";
+  reason?: string | null;
+  /** Required for `reschedule`; ignored otherwise. */
+  earliest_at?: string | null;
+  latest_at?: string | null;
+};
+
+export async function decideActionPlan(
+  planId: string,
+  data: PlanDecision,
+  options?: RequestOptions
+): Promise<APIResponse<ActionPlan>> {
+  return apiClient.post<ActionPlan>(`/plans/${planId}/decision`, data, options);
+}
+
 export async function approveActionPlan(
   actionPlanId: string,
   data?: { review_notes?: string | null; notes?: string | null },
   options?: RequestOptions
 ): Promise<APIResponse<ActionPlan>> {
-  return apiClient.post<ActionPlan>(`/action-plans/${actionPlanId}/approve`, data || {}, options);
+  return decideActionPlan(
+    actionPlanId,
+    { decision: "approve", reason: data?.review_notes ?? data?.notes ?? null },
+    options
+  );
 }
 
 export async function rejectActionPlan(
@@ -257,7 +308,28 @@ export async function rejectActionPlan(
   data?: { review_notes?: string | null; notes?: string | null },
   options?: RequestOptions
 ): Promise<APIResponse<ActionPlan>> {
-  return apiClient.post<ActionPlan>(`/action-plans/${actionPlanId}/reject`, data || {}, options);
+  return decideActionPlan(
+    actionPlanId,
+    { decision: "reject", reason: data?.review_notes ?? data?.notes ?? null },
+    options
+  );
+}
+
+export async function rescheduleActionPlan(
+  actionPlanId: string,
+  data: { earliest_at: string; latest_at: string; review_notes?: string | null },
+  options?: RequestOptions
+): Promise<APIResponse<ActionPlan>> {
+  return decideActionPlan(
+    actionPlanId,
+    {
+      decision: "reschedule",
+      earliest_at: data.earliest_at,
+      latest_at: data.latest_at,
+      reason: data.review_notes ?? null,
+    },
+    options
+  );
 }
 
 // ==========================================
@@ -427,6 +499,43 @@ export async function runDemo(
 
 export async function getDemoStatus(options?: RequestOptions): Promise<APIResponse<DemoStatusResponse>> {
   return apiClient.get<DemoStatusResponse>("/demo/status", options);
+}
+
+export interface SimulatorStatus {
+  enabled: boolean;
+  environment: string;
+  label: string;
+}
+
+export interface SimulatorEmitResult {
+  farm_id: string;
+  events_emitted: number;
+  history_events_seeded: number;
+  source: string;
+  simulated: boolean;
+}
+
+/** Whether simulator controls are available in this deployment. Disabled in production. */
+export async function getSimulatorStatus(
+  options?: RequestOptions
+): Promise<APIResponse<SimulatorStatus>> {
+  return apiClient.get<SimulatorStatus>("/demo/simulator/status", options);
+}
+
+/**
+ * Emit one round of clearly-labelled simulated readings for a farm.
+ * Every event is stored with source="simulator" and is never presented as live data.
+ */
+export async function emitSimulatedReadings(
+  farmId: string,
+  seedHistory = false,
+  options?: RequestOptions
+): Promise<APIResponse<SimulatorEmitResult>> {
+  return apiClient.post<SimulatorEmitResult>(
+    `/demo/simulator/emit?farm_id=${encodeURIComponent(farmId)}&seed_history=${seedHistory}`,
+    {},
+    options
+  );
 }
 
 // ==========================================

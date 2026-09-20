@@ -49,6 +49,7 @@ backend/.env*
 # IDE / Editor
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *.tsbuildinfo

@@ -11,7 +11,8 @@ from app.core.database import get_db
 from app.core.security import get_current_user, AuthUser, verify_risk_access
 from app.services.ai_context_service import AIContextService
 from app.services.audit_service import AuditService
-from app.ai.provider import get_ai_provider
+from app.ai.provider import get_ai_provider, MockAIProvider
+from app.core.exceptions import FarmOpsException
 from app.ai.agents.water_stress import WaterStressAgent
 from app.ai.agents.pest_disease import PestDiseaseAgent
 from app.ai.agents.nutrient import NutrientAgent
@@ -55,6 +56,8 @@ async def evaluate_risk_with_ai(
 
     # 3. Select appropriate domain agent
     provider = get_ai_provider()
+    if payload.require_live and isinstance(provider, MockAIProvider):
+        raise FarmOpsException(status_code=503, detail="Live AI is not configured. Configure GEMINI_API_KEY to generate advisory.")
     agent = _select_agent_for_risk(risk.risk_type, provider=provider)
 
     # 4. Generate structured AI proposal

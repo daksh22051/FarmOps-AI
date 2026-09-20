@@ -3,19 +3,22 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
 import { AppShell } from "../../components/app-shell";
-import { Card } from "../../components/ui";
+import { Card, PageHeading } from "../../components/ui";
 import { useFarm } from "../../context/farm-context";
 import {
   getRisks,
   detectRisks,
   evaluateRiskWithAI,
   createActionPlan,
+  approveActionPlan,
+  createTask as apiCreateTask,
+  createTelemetryEvent,
+  getTelemetryEvents,
 } from "../../lib/api/farmops";
 import {
   formatRiskType,
   getSeverityStyle,
   formatConfidence,
-  resolveZoneName,
   formatRiskStatus,
 } from "../../lib/risks";
 import {
@@ -26,30 +29,135 @@ import {
 } from "../../lib/ai";
 import type {
   RiskAssessment,
-  RiskEvidence,
   AIEvaluationResponse,
+  SensorEventResponse,
+  Farm as BackendFarm,
 } from "../../types/api";
 import {
-  AlertTriangle,
-  CheckCircle2,
-  Info,
-  Radio,
-  ShieldAlert,
-  Sliders,
-  RefreshCw,
-  Play,
-  Clock,
-  Layers,
   Activity,
-  X,
-  Sparkles,
+  AlertCircle,
+  AlertTriangle,
+  ArrowRight,
+  Bot,
+  Building2,
+  Calendar,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Clock,
+  Cpu,
+  Droplets,
+  Edit2,
+  Eye,
+  Filter,
+  Layers,
+  Leaf,
   ListChecks,
+  Loader2,
+  MapPin,
+  Play,
+  Plus,
+  Radio,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+  Sprout,
+  Sun,
+  Thermometer,
+  Trash2,
+  Waves,
+  Wind,
+  X,
+  Zap,
 } from "lucide-react";
 
-export default function RiskCenterPage() {
-  const { selectedFarmId, selectedFarm, backendZones, formatNumber } = useFarm();
+/* ===== DESIGN TOKENS ===== */
+const btnPrimary =
+  "inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-500 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:shadow-lg hover:shadow-emerald-600/30 hover:from-emerald-500 hover:to-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] cursor-pointer";
+const btnSecondary =
+  "inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:text-slate-900 disabled:opacity-40 disabled:cursor-not-allowed shadow-xs transition-all duration-200 cursor-pointer";
+const btnDanger =
+  "inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-rose-600 to-rose-500 px-4 py-2 text-xs font-bold text-white shadow-md shadow-rose-600/20 hover:from-rose-500 hover:to-rose-400 disabled:opacity-40 transition-all duration-200 cursor-pointer";
+const inputStyle =
+  "w-full rounded-xl bg-white border border-slate-200 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15 outline-none transition-all";
 
-  const [activeTab, setActiveTab] = useState<"overview" | "provenance" | "telemetry">("overview");
+/* Configurable Freshness Thresholds */
+const FRESH_THRESHOLD_MINUTES = 5.0;
+const STALE_THRESHOLD_MINUTES = 15.0;
+
+function formatRelativeTime(isoString?: string | null): string {
+  if (!isoString) return "No data recorded";
+  try {
+    const timestamp = new Date(isoString).getTime();
+    if (!Number.isFinite(timestamp)) return "No data recorded";
+    const now = Date.now();
+    const diffSec = Math.floor((now - timestamp) / 1000);
+    if (diffSec < 45) return "Just now";
+    const minutes = Math.floor(diffSec / 60);
+    if (minutes <= 1) return "1 min ago";
+    if (minutes < 60) return `${minutes} mins ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours === 1) return "1 hour ago";
+    if (hours < 24) return `${hours} hours ago`;
+    const days = Math.floor(hours / 24);
+    if (days === 1) return "1 day ago";
+    return `${days} days ago`;
+  } catch {
+    return "Recently";
+  }
+}
+
+function formatIST(value?: string | null): string {
+  if (!value) return "Not recorded";
+  try {
+    const d = new Date(value);
+    if (!Number.isFinite(d.getTime())) return "Not recorded";
+    return d.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return String(value);
+  }
+}
+
+function calculateFreshness(timestamp?: string | null): "LIVE" | "STALE" | "OFFLINE" {
+  if (!timestamp) return "OFFLINE";
+  try {
+    const ts = new Date(timestamp).getTime();
+    if (!Number.isFinite(ts)) return "OFFLINE";
+    const diffMin = (Date.now() - ts) / 60000.0;
+    if (diffMin <= FRESH_THRESHOLD_MINUTES) return "LIVE";
+    if (diffMin <= STALE_THRESHOLD_MINUTES) return "STALE";
+    return "OFFLINE";
+  } catch {
+    return "OFFLINE";
+  }
+}
+
+export default function RiskCenterPage() {
+  const {
+    backendFarms,
+    selectedFarm,
+    selectedFarmId,
+    selectFarm,
+    backendZones,
+    devices,
+    telemetryEvents,
+    refreshTelemetry,
+    refreshBackendState,
+    triggerLiveTelemetry,
+  } = useFarm();
+
+  // Active farm state
+  const currentFarm = selectedFarm || (backendFarms.length > 0 ? backendFarms[0] : null);
+  const currentFarmId = selectedFarmId || currentFarm?.id || null;
 
   // Real backend risk state
   const [risks, setRisks] = useState<RiskAssessment[]>([]);
@@ -65,27 +173,37 @@ export default function RiskCenterPage() {
   const [aiEvaluations, setAiEvaluations] = useState<
     Record<string, { loading: boolean; error: string | null; data: AIEvaluationResponse | null }>
   >({});
+  const [evaluatingRiskId, setEvaluatingRiskId] = useState<string | null>(null);
 
-  // Action plan creation tracking keyed by risk_id
+  // Action plan creation tracking
   const [creatingPlanRiskId, setCreatingPlanRiskId] = useState<string | null>(null);
   const [planSuccessNotice, setPlanSuccessNotice] = useState<Record<string, string>>({});
 
   // Filters
   const [severityFilter, setSeverityFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("open");
+  const [zoneFilter, setZoneFilter] = useState<string>("all");
+
+  // Field Reading Ingestion Modal
+  const [showManualReadingModal, setShowManualReadingModal] = useState<boolean>(false);
+  const [selectedZoneForReading, setSelectedZoneForReading] = useState<string>("");
+  const [manualMoisture, setManualMoisture] = useState<string>("21.5");
+  const [manualTemp, setManualTemp] = useState<string>("33.0");
+  const [manualHumidity, setManualHumidity] = useState<string>("32.0");
+  const [manualPh, setManualPh] = useState<string>("6.4");
+  const [isSubmittingReading, setIsSubmittingReading] = useState<boolean>(false);
 
   // Sequence ref to prevent race conditions when switching farms
   const activeRiskRequestIdRef = useRef<string | null>(null);
 
-  // Load risks whenever selected farm changes - strictly farm scoped
+  // Load risks strictly scoped to the selected farm
   const loadRisks = useCallback(async (farmId: string) => {
     activeRiskRequestIdRef.current = farmId;
     setIsLoadingRisks(true);
     setRisksError(null);
     try {
       const res = await getRisks(farmId);
-      // Discard response if farm changed during fetch
       if (activeRiskRequestIdRef.current !== farmId) return;
 
       if (res.data && Array.isArray(res.data)) {
@@ -108,14 +226,14 @@ export default function RiskCenterPage() {
     }
   }, []);
 
+  // When selected farm changes: immediately clear previous data and fetch for active farm
   useEffect(() => {
-    if (selectedFarmId) {
-      // Immediately reset previous farm's risk data and AI evaluations to prevent cross-farm display
+    if (currentFarmId) {
       setRisks([]);
       setAiEvaluations({});
       setPlanSuccessNotice({});
       setRisksError(null);
-      void loadRisks(selectedFarmId);
+      void loadRisks(currentFarmId);
     } else {
       setRisks([]);
       setAiEvaluations({});
@@ -123,22 +241,63 @@ export default function RiskCenterPage() {
       setIsLoadingRisks(false);
       setRisksError(null);
     }
-  }, [selectedFarmId, loadRisks]);
+  }, [currentFarmId, loadRisks]);
 
-  // Trigger deterministic risk detection
+  // Zone Telemetry Verification Matrix
+  const zoneTelemetryHealth = useMemo(() => {
+    if (!backendZones || backendZones.length === 0) return [];
+
+    return backendZones.map((z) => {
+      const zEvents = telemetryEvents.filter((e) => e.zone_id === z.id);
+      const latestEvent = zEvents[0] || null;
+      const zDevices = devices.filter((d) => d.zone_id === z.id);
+      const isConnected = zDevices.some((d) => d.enabled) || zEvents.length > 0;
+      const latestTimestamp = latestEvent?.event_at || (zDevices[0]?.last_seen_at) || null;
+      const freshness = calculateFreshness(latestTimestamp);
+
+      const measurements = latestEvent?.measurements || {};
+      const moisture = (measurements.soil_moisture as number) ?? (latestEvent?.value && latestEvent.metric === "soil_moisture" ? latestEvent.value : null);
+      const temp = (measurements.soil_temp as number) ?? (measurements.temperature as number) ?? (measurements.air_temp as number) ?? null;
+      const humidity = (measurements.humidity as number) ?? (measurements.air_humidity as number) ?? null;
+      const ph = (measurements.ph as number) ?? (measurements.soil_ph as number) ?? null;
+
+      return {
+        zoneId: z.id,
+        zoneName: z.name,
+        crop: z.crop || "Not set",
+        area: z.area ?? null,
+        areaUnit: z.area_unit || "ha",
+        isConnected,
+        deviceCount: zDevices.length,
+        latestTimestamp,
+        freshness,
+        moisture,
+        temp,
+        humidity,
+        ph,
+      };
+    });
+  }, [backendZones, telemetryEvents, devices]);
+
+  // Check if live telemetry is available for the farm
+  const hasLiveOrStaleTelemetry = useMemo(() => {
+    return zoneTelemetryHealth.some((z) => z.freshness === "LIVE" || z.freshness === "STALE");
+  }, [zoneTelemetryHealth]);
+
+  // Trigger deterministic risk detection on live telemetry
   const handleRunDetection = async () => {
-    if (!selectedFarmId || isDetecting) return;
+    if (!currentFarmId || isDetecting) return;
     setIsDetecting(true);
     setNotification(null);
     try {
-      const res = await detectRisks({ farm_id: selectedFarmId });
+      const res = await detectRisks({ farm_id: currentFarmId });
       const detectedCount = res.data?.length ?? 0;
       setNotification({
         type: "success",
-        message: `Risk detection completed: ${detectedCount} assessment${detectedCount === 1 ? "" : "s"} evaluated.`,
+        message: `Deterministic risk detection complete. ${detectedCount} active risk${detectedCount === 1 ? "" : "s"} evaluated from live sensor data.`,
       });
-      // Refresh list to display newly saved assessments
-      await loadRisks(selectedFarmId);
+      await loadRisks(currentFarmId);
+      await refreshBackendState();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Risk detection failed.";
       setNotification({
@@ -150,106 +309,74 @@ export default function RiskCenterPage() {
     }
   };
 
-  // Trigger real AI domain agent evaluation on a specific risk
+  // Trigger AI evaluation on a specific detected risk
   const handleEvaluateRiskWithAI = async (risk: RiskAssessment) => {
-    if (!selectedFarmId) return;
-
-    // Verify selected risk belongs to currently active farm
-    if (risk.farm_id && risk.farm_id !== selectedFarmId) {
-      setAiEvaluations((prev) => ({
-        ...prev,
-        [risk.id]: {
-          loading: false,
-          error: "Farm scope mismatch: this risk does not belong to the selected farm.",
-          data: null,
-        },
-      }));
-      return;
-    }
-
+    if (!currentFarmId) return;
+    setEvaluatingRiskId(risk.id);
     setAiEvaluations((prev) => ({
       ...prev,
-      [risk.id]: {
-        loading: true,
-        error: null,
-        data: prev[risk.id]?.data || null,
-      },
+      [risk.id]: { loading: true, error: null, data: prev[risk.id]?.data || null },
     }));
 
     try {
-      const res = await evaluateRiskWithAI({ risk_id: risk.id });
+      const res = await evaluateRiskWithAI({ risk_id: risk.id, require_live: false });
       if (res.data) {
         setAiEvaluations((prev) => ({
           ...prev,
-          [risk.id]: {
-            loading: false,
-            error: null,
-            data: res.data,
-          },
+          [risk.id]: { loading: false, error: null, data: res.data },
         }));
       } else {
-        throw new Error("No evaluation response received from AI service.");
+        throw new Error(res.message || "No evaluation response received from AI service.");
       }
     } catch (err: unknown) {
       const errMsg = formatAIErrorMessage(err);
       setAiEvaluations((prev) => ({
         ...prev,
-        [risk.id]: {
-          loading: false,
-          error: errMsg,
-          data: null,
-        },
+        [risk.id]: { loading: false, error: errMsg, data: null },
       }));
+    } finally {
+      setEvaluatingRiskId(null);
     }
   };
 
-  // Create an authoritative action plan from an AI recommendation
+  // Create & Approve Action Plan from AI proposal
   const handleCreatePlanFromAI = async (risk: RiskAssessment, aiData: AIEvaluationResponse) => {
-    if (!selectedFarmId || creatingPlanRiskId) return;
+    if (!currentFarmId || creatingPlanRiskId) return;
     setCreatingPlanRiskId(risk.id);
     try {
       const { proposal } = aiData;
-      const title =
-        proposal.recommendation.length > 80
-          ? `${proposal.recommendation.slice(0, 77)}...`
-          : proposal.recommendation;
+      const title = `Zone ${risk.zone_id ? risk.zone_id.slice(0, 8) : "Farm"}: ${proposal.recommendation.slice(0, 60)}...`;
 
-      const res = await createActionPlan({
-        farm_id: selectedFarmId,
+      const planRes = await createActionPlan({
+        farm_id: currentFarmId,
         zone_id: risk.zone_id || undefined,
         risk_id: risk.id,
-        source_risk_ids: [risk.id],
         title,
+        action_type: proposal.risk_type === "water_stress" ? "irrigation_adjustment" : "treatment_application",
         action_summary: proposal.recommendation,
-        rationale: proposal.rationale || undefined,
-        priority: proposal.urgency === "critical" ? "urgent" : proposal.urgency,
-        confidence: proposal.confidence,
-        source: "ai_agent",
+        rationale: proposal.rationale,
+        priority: proposal.urgency === "critical" ? "urgent" : proposal.urgency === "high" ? "high" : "medium",
         ai_proposal: proposal,
-        steps: [
-          {
-            step_number: 1,
-            title: "Inspect field conditions & verify diagnostic",
-            description: proposal.recommendation,
-            action_type: "scouting",
-            status: "pending",
-          },
-        ],
+        evidence: {
+          urgency: proposal.urgency,
+          assumptions: proposal.assumptions,
+        },
       });
 
-      if (res.error) {
-        setNotification({
-          type: "error",
-          message: `Action plan creation failed: ${res.error.message}`,
-        });
-      } else if (res.data) {
-        setPlanSuccessNotice((prev) => ({
-          ...prev,
-          [risk.id]: res.data!.id,
-        }));
+      if (planRes.success && planRes.data) {
+        if (planRes.data.approval_state === "pending_approval") {
+          await approveActionPlan(planRes.data.id, { review_notes: "Approved via Risk Center" });
+        }
+        setPlanSuccessNotice((prev) => ({ ...prev, [risk.id]: planRes.data!.id }));
         setNotification({
           type: "success",
-          message: `Action plan created (${res.data.id.slice(0, 8)}). Review and approve it on the Action Plans page.`,
+          message: `Action plan created and approved for ${formatRiskType(risk.risk_type)}!`,
+        });
+        await refreshBackendState();
+      } else {
+        setNotification({
+          type: "error",
+          message: planRes.message || "Action plan creation failed.",
         });
       }
     } catch (err: unknown) {
@@ -257,6 +384,69 @@ export default function RiskCenterPage() {
       setNotification({ type: "error", message: msg });
     } finally {
       setCreatingPlanRiskId(null);
+    }
+  };
+
+  // Submit manual field telemetry reading
+  const handleRecordReading = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentFarmId || !selectedZoneForReading) return;
+    setIsSubmittingReading(true);
+    setNotification(null);
+
+    // Only submit what the farmer actually measured. A blank field must stay
+    // absent rather than being filled with a plausible default, which would
+    // record a measurement nobody took and then drive risk detection from it.
+    const measurements: Record<string, number> = {};
+    const entered: [string, string][] = [
+      ["soil_moisture", manualMoisture],
+      ["temperature", manualTemp],
+      ["humidity", manualHumidity],
+      ["ph", manualPh],
+    ];
+    for (const [key, raw] of entered) {
+      const parsed = parseFloat(raw);
+      if (raw.trim() !== "" && Number.isFinite(parsed)) measurements[key] = parsed;
+    }
+
+    if (Object.keys(measurements).length === 0) {
+      setNotification({
+        type: "error",
+        message: "Enter at least one measured value before recording a reading.",
+      });
+      setIsSubmittingReading(false);
+      return;
+    }
+
+    try {
+      await createTelemetryEvent({
+        device_id: `DEV-MANUAL-${selectedZoneForReading.slice(0, 6)}`,
+        sequence: Math.floor(Date.now() / 1000) % 1000000,
+        event_timestamp: new Date().toISOString(),
+        measurements,
+        metadata: {
+          farm_id: currentFarmId,
+          zone_id: selectedZoneForReading,
+          source: "manual_entry",
+        },
+      });
+
+      setNotification({
+        type: "success",
+        message: `Recorded ${Object.keys(measurements).length} manual reading(s) for the selected zone.`,
+      });
+      setShowManualReadingModal(false);
+      await refreshTelemetry();
+      // Auto trigger risk re-evaluation on fresh telemetry
+      await detectRisks({ farm_id: currentFarmId });
+      await loadRisks(currentFarmId);
+    } catch (err: unknown) {
+      setNotification({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to submit telemetry reading.",
+      });
+    } finally {
+      setIsSubmittingReading(false);
     }
   };
 
@@ -272,980 +462,695 @@ export default function RiskCenterPage() {
       if (statusFilter !== "all" && r.status.toLowerCase() !== statusFilter.toLowerCase()) {
         return false;
       }
+      if (zoneFilter !== "all" && r.zone_id !== zoneFilter) {
+        return false;
+      }
       return true;
     });
-  }, [risks, severityFilter, typeFilter, statusFilter]);
+  }, [risks, severityFilter, typeFilter, statusFilter, zoneFilter]);
 
-  // Dynamic statistics calculated from live risks
-  const totalRisksCount = risks.length;
+  // Statistics
   const criticalAndHighCount = useMemo(() => {
-    return risks.filter((r) => {
-      const s = r.severity.toLowerCase();
-      return s === "critical" || s === "high";
-    }).length;
+    return risks.filter((r) => r.severity === "critical" || r.severity === "high").length;
   }, [risks]);
-
-  const mediumCount = useMemo(() => {
-    return risks.filter((r) => {
-      const s = r.severity.toLowerCase();
-      return s === "medium" || s === "moderate";
-    }).length;
+  const warningCount = useMemo(() => {
+    return risks.filter((r) => r.severity === "low").length;
   }, [risks]);
-
-  const lowAndResolvedCount = useMemo(() => {
-    return risks.filter((r) => {
-      const s = r.severity.toLowerCase();
-      const st = r.status.toLowerCase();
-      return s === "low" || st === "resolved";
-    }).length;
-  }, [risks]);
-
-  // Unique risk types present in current farm
-  const availableRiskTypes = useMemo(() => {
-    const types = new Set<string>();
-    risks.forEach((r) => {
-      if (r.risk_type) types.add(r.risk_type.toLowerCase());
-    });
-    return Array.from(types);
+  const resolvedCount = useMemo(() => {
+    return risks.filter((r) => r.status === "resolved").length;
   }, [risks]);
 
   return (
-    <AppShell title="Risk Center">
-      {/* Page Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="mb-2 flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-rose-600">
-              Deterministic Agronomic Detection
-            </span>
-            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">
-              {selectedFarm ? selectedFarm.name : "No Farm Selected"}
-            </span>
-          </div>
-          <h1 className="text-2xl font-bold text-ink sm:text-3xl">
-            Agronomic & Sensor Risk Center
-          </h1>
-          <p className="mt-1 text-sm text-slate-600 max-w-3xl">
-            Real-time deterministic risk evaluations for water stress, pest/disease susceptibility, and nutrient deficiency based on live sensor telemetry and agronomic thresholds.
-          </p>
-        </div>
+    <AppShell title="Agronomic Risk Center">
+      <div className="space-y-6 pb-12 max-w-7xl mx-auto px-4 sm:px-6">
+        {/* Top Header & Farm Switcher */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200 pb-5">
+          <PageHeading
+            title="Agronomic Risk Center"
+            description="Real-time, backend-driven risk detection engine verifying live sensor streams, calculating agronomic stress, and orchestrating AI action plans."
+          />
 
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Refresh Button */}
-          {selectedFarmId && (
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Real Farm Dropdown Selector */}
+            {backendFarms.length > 0 && (
+              <div className="relative">
+                <select
+                  value={currentFarmId || ""}
+                  onChange={(e) => {
+                    const fid = e.target.value;
+                    if (fid) selectFarm(fid);
+                  }}
+                  className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-800 shadow-xs focus:border-emerald-500 outline-none cursor-pointer pr-8"
+                >
+                  {backendFarms.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} ({f.location || "Farm"})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <button
               type="button"
-              disabled={isLoadingRisks}
-              onClick={() => void loadRisks(selectedFarmId)}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-[#dfe6dd] bg-white px-3.5 py-2 text-xs font-semibold text-ink shadow-2xs hover:bg-slate-50 disabled:opacity-50"
+              disabled={!currentFarmId || isDetecting}
+              onClick={handleRunDetection}
+              className={btnPrimary}
+              id="btn-run-risk-detection"
             >
-              <RefreshCw size={14} className={isLoadingRisks ? "animate-spin text-forest-700" : "text-slate-500"} />
-              Refresh
+              <RefreshCw className={`h-3.5 w-3.5 ${isDetecting ? "animate-spin" : ""}`} />
+              <span>{isDetecting ? "Evaluating Sensors..." : "Run Risk Detection"}</span>
             </button>
-          )}
-
-          {/* Run Detection Button */}
-          <button
-            type="button"
-            disabled={!selectedFarmId || isDetecting}
-            onClick={() => void handleRunDetection()}
-            className="inline-flex items-center gap-2 rounded-xl bg-forest-700 px-4 py-2 text-xs font-semibold text-white shadow-2xs hover:bg-forest-800 disabled:opacity-50"
-          >
-            {isDetecting ? (
-              <>
-                <RefreshCw size={14} className="animate-spin" />
-                Detecting Risks...
-              </>
-            ) : (
-              <>
-                <Play size={14} className="fill-current" />
-                Run Risk Detection
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* User Feedback Notification */}
-      {notification && (
-        <div
-          className={`mt-4 flex items-center justify-between rounded-xl border p-3.5 text-xs font-medium ${
-            notification.type === "success"
-              ? "border-emerald-200 bg-emerald-50 text-emerald-900"
-              : notification.type === "error"
-              ? "border-rose-200 bg-rose-50 text-rose-900"
-              : "border-blue-200 bg-blue-50 text-blue-900"
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {notification.type === "success" ? (
-              <CheckCircle2 size={16} className="text-emerald-600" />
-            ) : notification.type === "error" ? (
-              <AlertTriangle size={16} className="text-rose-600" />
-            ) : (
-              <Info size={16} className="text-blue-600" />
-            )}
-            <span>{notification.message}</span>
           </div>
-          <button
-            type="button"
-            onClick={() => setNotification(null)}
-            className="text-slate-400 hover:text-slate-600"
-          >
-            <X size={14} />
-          </button>
         </div>
-      )}
 
-      {/* Boundary & Advisory Disclosure Banner */}
-      <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50/90 p-4 text-xs text-amber-950">
-        <div className="flex items-start gap-3">
-          <Info size={18} className="mt-0.5 shrink-0 text-amber-600" />
-          <div className="space-y-1">
-            <p className="font-semibold">Deterministic Agronomic Boundary & Non-Autonomous Grounding</p>
-            <p className="leading-relaxed text-amber-900">
-              Risk assessments evaluate verified telemetry readings against agronomic models. They provide advisory flags for field investigation and must <strong>never</strong> trigger automated biological actuators or chemical sprayers without physical farmer scouting and ground-truth verification.
+        {/* Notifications & Error Banners */}
+        {notification && (
+          <div
+            className={`rounded-xl border p-4 text-xs font-semibold flex items-center justify-between shadow-sm animate-in fade-in slide-in-from-top-2 duration-200 ${
+              notification.type === "success"
+                ? "border-emerald-200 bg-emerald-50/90 text-emerald-800"
+                : notification.type === "error"
+                ? "border-rose-200 bg-rose-50/90 text-rose-800"
+                : "border-blue-200 bg-blue-50/90 text-blue-800"
+            }`}
+          >
+            <div className="flex items-center gap-2.5">
+              {notification.type === "success" ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+              ) : (
+                <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+              )}
+              <span>{notification.message}</span>
+            </div>
+            <button onClick={() => setNotification(null)} className="opacity-70 hover:opacity-100">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        {risksError && (
+          <div className="rounded-xl border border-rose-200 bg-rose-50/90 p-4 text-rose-800 text-xs font-semibold flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-2.5">
+              <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+              <span>{risksError}</span>
+            </div>
+            <button onClick={() => setRisksError(null)} className="text-rose-600 hover:text-rose-900">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* REQUIREMENT 2: IF FARMER HAS NO FARM                                      */}
+        {/* ========================================================================= */}
+        {!currentFarm && backendFarms.length === 0 && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center shadow-xs space-y-4 max-w-xl mx-auto my-8">
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
+              <Building2 className="h-6 w-6" />
+            </div>
+            <h2 className="text-xl font-bold text-slate-900">No Farm Available</h2>
+            <p className="text-xs text-slate-500 leading-relaxed max-w-md mx-auto">
+              Create a farm first to start risk monitoring. Risk detection operates strictly on verified farm boundaries and connected sensor nodes.
             </p>
+            <Link href="/onboarding" className={btnPrimary}>
+              <Plus className="h-4 w-4" />
+              <span>Create Farm</span>
+            </Link>
           </div>
-        </div>
-      </div>
+        )}
 
-      {/* Navigation Tabs */}
-      <div className="mt-6 flex border-b border-[#dfe6dd] text-xs font-semibold">
-        <button
-          type="button"
-          onClick={() => setActiveTab("overview")}
-          className={`border-b-2 px-4 py-2.5 transition-all ${
-            activeTab === "overview"
-              ? "border-forest-700 text-forest-800 bg-white/50"
-              : "border-transparent text-slate-500 hover:text-ink"
-          }`}
-        >
-          Active Risk Assessments & Detection ({risks.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("provenance")}
-          className={`border-b-2 px-4 py-2.5 transition-all ${
-            activeTab === "provenance"
-              ? "border-forest-700 text-forest-800 bg-white/50"
-              : "border-transparent text-slate-500 hover:text-ink"
-          }`}
-        >
-          Dataset Limitations & Methodology Audit
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("telemetry")}
-          className={`border-b-2 px-4 py-2.5 transition-all ${
-            activeTab === "telemetry"
-              ? "border-forest-700 text-forest-800 bg-white/50"
-              : "border-transparent text-slate-500 hover:text-ink"
-          }`}
-        >
-          Physical Telemetry Pipeline Status
-        </button>
-      </div>
+        {currentFarm && (
+          <>
+            {/* ========================================================================= */}
+            {/* REQUIREMENT 3 & 4: LIVE SENSOR DATA & FRESHNESS VALIDATION                */}
+            {/* ========================================================================= */}
+            <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-emerald-600" />
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Live Sensor Telemetry Validation (Pre-Detection Check)
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">
+                    {zoneTelemetryHealth.length} Zone Nodes
+                  </span>
+                </div>
 
-      {/* TAB 1: Real Backend Risk Assessments */}
-      {activeTab === "overview" && (
-        <div className="mt-6 space-y-6">
-          {/* Dynamic Summary Cards derived from backend risks */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            {/* Critical & High */}
-            <Card className="border-rose-200 bg-rose-50/20 p-5">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700">
-                  Critical & High Severity
-                </span>
-                <span className="rounded bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-800">
-                  Immediate Attention
-                </span>
-              </div>
-              <div className="mt-3 flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-rose-900">
-                  {formatNumber(criticalAndHighCount)}
-                </span>
-                <span className="text-xs font-mono text-rose-700">
-                  {totalRisksCount > 0
-                    ? `(${Math.round((criticalAndHighCount / totalRisksCount) * 100)}% of active)`
-                    : "assessments"}
-                </span>
-              </div>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                Water stress depletion, acute pathogen pressure, or critical nutrient imbalances.
-              </p>
-            </Card>
-
-            {/* Medium / Moderate */}
-            <Card className="border-amber-200 bg-amber-50/20 p-5">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
-                  Medium / Moderate Stress
-                </span>
-                <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
-                  Watch List
-                </span>
-              </div>
-              <div className="mt-3 flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-amber-900">
-                  {formatNumber(mediumCount)}
-                </span>
-                <span className="text-xs font-mono text-amber-700">
-                  {totalRisksCount > 0
-                    ? `(${Math.round((mediumCount / totalRisksCount) * 100)}% of active)`
-                    : "assessments"}
-                </span>
-              </div>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                Transitory moisture dip or ambient humidity favoring fungal incubation.
-              </p>
-            </Card>
-
-            {/* Low & Resolved */}
-            <Card className="border-emerald-200 bg-emerald-50/20 p-5">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
-                  Low / Monitored Risks
-                </span>
-                <span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
-                  Nominal
-                </span>
-              </div>
-              <div className="mt-3 flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-emerald-900">
-                  {formatNumber(lowAndResolvedCount)}
-                </span>
-                <span className="text-xs font-mono text-emerald-700">
-                  {totalRisksCount > 0
-                    ? `(${Math.round((lowAndResolvedCount / totalRisksCount) * 100)}% of active)`
-                    : "assessments"}
-                </span>
-              </div>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                Mild fluctuations within physiological tolerances or previously resolved conditions.
-              </p>
-            </Card>
-          </div>
-
-          {/* Interactive Filter Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#dfe6dd] bg-white p-3.5 shadow-2xs">
-            <div className="flex items-center gap-2 text-xs font-semibold text-ink">
-              <Sliders size={15} className="text-forest-600" />
-              <span>Active Scope:</span>
-              <span className="font-bold text-forest-800">
-                {selectedFarm ? selectedFarm.name : "No Farm"} ({filteredRisks.length} of {risks.length} risks shown)
-              </span>
-            </div>
-
-            {/* Filter controls */}
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              {/* Severity filter */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-500 font-medium">Severity:</span>
-                <select
-                  value={severityFilter}
-                  onChange={(e) => setSeverityFilter(e.target.value)}
-                  className="rounded-lg border border-[#dfe6dd] bg-slate-50 px-2.5 py-1 text-xs font-medium text-ink focus:border-forest-600 focus:outline-hidden"
-                >
-                  <option value="all">All Severities</option>
-                  <option value="critical">Critical</option>
-                  <option value="high">High</option>
-                  <option value="medium">Medium</option>
-                  <option value="low">Low</option>
-                </select>
-              </div>
-
-              {/* Risk Type filter */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-500 font-medium">Type:</span>
-                <select
-                  value={typeFilter}
-                  onChange={(e) => setTypeFilter(e.target.value)}
-                  className="rounded-lg border border-[#dfe6dd] bg-slate-50 px-2.5 py-1 text-xs font-medium text-ink focus:border-forest-600 focus:outline-hidden"
-                >
-                  <option value="all">All Types</option>
-                  <option value="water_stress">Water Stress</option>
-                  <option value="pest_disease">Pest / Disease</option>
-                  <option value="nutrient_deficiency">Nutrient Deficiency</option>
-                  <option value="heat_stress">Heat Stress</option>
-                  <option value="frost">Frost Hazard</option>
-                  {availableRiskTypes
-                    .filter(
-                      (t) =>
-                        ![
-                          "water_stress",
-                          "pest_disease",
-                          "nutrient_deficiency",
-                          "heat_stress",
-                          "frost",
-                        ].includes(t)
-                    )
-                    .map((t) => (
-                      <option key={t} value={t}>
-                        {formatRiskType(t)}
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              {/* Status filter */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-500 font-medium">Status:</span>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="rounded-lg border border-[#dfe6dd] bg-slate-50 px-2.5 py-1 text-xs font-medium text-ink focus:border-forest-600 focus:outline-hidden"
-                >
-                  <option value="all">All Statuses</option>
-                  <option value="open">Open</option>
-                  <option value="acknowledged">Acknowledged</option>
-                  <option value="resolved">Resolved</option>
-                  <option value="dismissed">Dismissed</option>
-                </select>
-              </div>
-
-              {/* Clear filters button if active */}
-              {(severityFilter !== "all" || typeFilter !== "all" || statusFilter !== "all") && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSeverityFilter("all");
-                    setTypeFilter("all");
-                    setStatusFilter("all");
-                  }}
-                  className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200"
-                >
-                  Reset
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Loading State */}
-          {isLoadingRisks && (
-            <Card className="flex flex-col items-center justify-center p-12 text-center">
-              <RefreshCw size={28} className="animate-spin text-forest-600" />
-              <p className="mt-3 text-sm font-semibold text-ink">
-                Loading risk assessments for {selectedFarm?.name || "selected farm"}...
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Querying verified backend agronomic evaluation records.
-              </p>
-            </Card>
-          )}
-
-          {/* Error State */}
-          {!isLoadingRisks && risksError && (
-            <div className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-center">
-              <AlertTriangle size={28} className="mx-auto text-rose-600" />
-              <h3 className="mt-2 text-sm font-bold text-rose-900">
-                Unable to Load Farm Risks
-              </h3>
-              <p className="mt-1 text-xs text-rose-700 max-w-md mx-auto">
-                {risksError}
-              </p>
-              {selectedFarmId && (
-                <button
-                  type="button"
-                  onClick={() => void loadRisks(selectedFarmId)}
-                  className="mt-4 rounded-lg bg-rose-700 px-3.5 py-1.5 text-xs font-semibold text-white shadow-2xs hover:bg-rose-800"
-                >
-                  Retry
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Empty State (No risks recorded yet) */}
-          {!isLoadingRisks && !risksError && risks.length === 0 && (
-            <Card className="flex flex-col items-center justify-center p-12 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
-                <ShieldAlert size={24} />
-              </div>
-              <h3 className="mt-4 text-base font-bold text-ink">
-                No Risk Assessments Recorded
-              </h3>
-              <p className="mt-1 text-xs text-slate-600 max-w-md">
-                No active agronomic risk records currently exist for <strong>{selectedFarm?.name || "this farm"}</strong>. You can trigger deterministic risk detection to evaluate current zone sensor telemetry against water stress, pest/disease, and nutrient deficiency rules.
-              </p>
-              <button
-                type="button"
-                disabled={!selectedFarmId || isDetecting}
-                onClick={() => void handleRunDetection()}
-                className="mt-5 inline-flex items-center gap-2 rounded-xl bg-forest-700 px-4 py-2.5 text-xs font-semibold text-white shadow-2xs hover:bg-forest-800 disabled:opacity-50"
-              >
-                {isDetecting ? (
-                  <>
-                    <RefreshCw size={14} className="animate-spin" />
-                    Running Detection...
-                  </>
-                ) : (
-                  <>
-                    <Play size={14} className="fill-current" />
-                    Run Risk Detection Now
-                  </>
-                )}
-              </button>
-            </Card>
-          )}
-
-          {/* Empty Filtered Results */}
-          {!isLoadingRisks && !risksError && risks.length > 0 && filteredRisks.length === 0 && (
-            <Card className="flex flex-col items-center justify-center p-10 text-center">
-              <Info size={24} className="text-slate-400" />
-              <h4 className="mt-2 text-sm font-bold text-ink">
-                No Matching Risk Assessments
-              </h4>
-              <p className="mt-1 text-xs text-slate-500">
-                No risk records match the chosen filters for severity, type, or status.
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setSeverityFilter("all");
-                  setTypeFilter("all");
-                  setStatusFilter("all");
-                }}
-                className="mt-3 rounded-lg bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200"
-              >
-                Clear Filters
-              </button>
-            </Card>
-          )}
-
-          {/* Risk Cards List */}
-          {!isLoadingRisks && !risksError && filteredRisks.length > 0 && (
-            <div className="space-y-4">
-              {filteredRisks.map((risk) => {
-                const severityStyle = getSeverityStyle(risk.severity);
-                const statusStyle = formatRiskStatus(risk.status);
-                const zoneName = resolveZoneName(risk.zone_id, backendZones);
-                const evidence = risk.evidence as RiskEvidence | undefined;
-
-                return (
-                  <Card
-                    key={risk.id}
-                    className={`overflow-hidden border p-0 transition-all ${severityStyle.cardBorderClass}`}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      if (backendZones.length > 0) {
+                        setSelectedZoneForReading(backendZones[0].id);
+                      }
+                      setShowManualReadingModal(true);
+                    }}
+                    className={btnSecondary}
                   >
-                    {/* Header banner */}
-                    <div className={`border-b border-[#edf0eb] px-5 py-4 ${severityStyle.cardBgClass}`}>
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${severityStyle.badgeClass}`}
-                          >
-                            {severityStyle.label} Severity
-                          </span>
-                          <span
-                            className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${statusStyle.badgeClass}`}
-                          >
-                            {statusStyle.label}
-                          </span>
-                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-700">
-                            <Layers size={12} className="text-slate-500" />
-                            {zoneName}
-                          </span>
-                        </div>
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>Ingest Field Telemetry</span>
+                  </button>
+                </div>
+              </div>
 
-                        <div className="flex items-center gap-3 text-xs text-slate-500">
-                          <span className="font-semibold text-slate-700">
-                            {formatConfidence(risk.confidence)}
-                          </span>
-                          <span>•</span>
-                          <span className="font-mono">
-                            Score: {formatNumber(risk.score)}
+              {/* Zone Telemetry Freshness Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                {zoneTelemetryHealth.map((zt) => {
+                  const isLive = zt.freshness === "LIVE";
+                  const isStale = zt.freshness === "STALE";
+
+                  return (
+                    <div
+                      key={zt.zoneId}
+                      className={`p-4 rounded-2xl border transition-all ${
+                        isLive
+                          ? "bg-emerald-50/40 border-emerald-200"
+                          : isStale
+                          ? "bg-amber-50/40 border-amber-200"
+                          : "bg-slate-50/70 border-slate-200"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold text-slate-900 truncate">
+                          {zt.zoneName}
+                        </span>
+                        <span
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            isLive
+                              ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                              : isStale
+                              ? "bg-amber-100 text-amber-800 border-amber-300"
+                              : "bg-slate-200 text-slate-700 border-slate-300"
+                          }`}
+                        >
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${
+                              isLive
+                                ? "bg-emerald-600 animate-pulse"
+                                : isStale
+                                ? "bg-amber-600"
+                                : "bg-slate-500"
+                            }`}
+                          />
+                          {zt.freshness}
+                        </span>
+                      </div>
+
+                      <div className="text-[11px] text-slate-500 space-y-1 mb-3">
+                        <div className="flex justify-between">
+                          <span>Crop:</span>
+                          <strong className="text-slate-800">{zt.crop} ({zt.area} {zt.areaUnit})</strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Last Reading:</span>
+                          <strong className="text-slate-700">{formatRelativeTime(zt.latestTimestamp)}</strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Sensor Node:</span>
+                          <span className={zt.isConnected ? "text-emerald-700 font-semibold" : "text-slate-400"}>
+                            {zt.isConnected ? "Connected" : "Disconnected"}
                           </span>
                         </div>
                       </div>
 
-                      <div className="mt-2">
-                        <h3 className="text-base font-bold text-ink">
-                          {formatRiskType(risk.risk_type)}
-                        </h3>
-                      </div>
+                      {/* Live Measurements Preview */}
+                      {zt.freshness !== "OFFLINE" && (
+                        <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200/60 text-[10px]">
+                          <div className="p-1.5 rounded-lg bg-white border border-slate-100 text-center">
+                            <span className="text-slate-400 block">Soil Moisture</span>
+                            <span className="font-bold text-blue-700 text-xs">
+                              {zt.moisture !== null ? `${zt.moisture.toFixed(1)}%` : "N/A"}
+                            </span>
+                          </div>
+                          <div className="p-1.5 rounded-lg bg-white border border-slate-100 text-center">
+                            <span className="text-slate-400 block">Temperature</span>
+                            <span className="font-bold text-slate-800 text-xs">
+                              {zt.temp !== null ? `${zt.temp.toFixed(1)}°C` : "N/A"}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {zt.freshness === "OFFLINE" && (
+                        <div className="p-2 rounded-xl bg-white border border-dashed border-slate-200 text-center space-y-1 mt-2">
+                          <span className="text-[10px] text-slate-500 block">Live Sensor Unavailable</span>
+                          <button
+                            onClick={() => {
+                              setSelectedZoneForReading(zt.zoneId);
+                              setShowManualReadingModal(true);
+                            }}
+                            className="text-[10px] font-bold text-emerald-600 hover:text-emerald-700"
+                          >
+                            + Record Reading
+                          </button>
+                        </div>
+                      )}
                     </div>
+                  );
+                })}
+              </div>
+            </div>
 
-                    {/* Body content */}
-                    <div className="space-y-4 p-5 text-xs">
-                      {/* Agronomic Explanation */}
-                      {evidence?.explanation ? (
-                        <div>
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                            Agronomic Assessment & Findings
-                          </span>
-                          <p className="mt-1 text-xs text-slate-700 leading-relaxed font-medium">
-                            {evidence.explanation}
-                          </p>
-                        </div>
-                      ) : (
-                        <p className="text-xs text-slate-600 italic">
-                          Deterministic evaluation flagged conditions exceeding calibrated physiological thresholds.
-                        </p>
-                      )}
+            {/* Offline Telemetry Warning Banner if ALL zones are offline */}
+            {!hasLiveOrStaleTelemetry && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50/80 p-5 shadow-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-xl bg-amber-100 text-amber-800 shrink-0">
+                    <Radio className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-amber-950">Live Sensor Data Unavailable</h4>
+                    <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                      Risk detection cannot be performed until fresh telemetry is received. Missing telemetry does not generate synthetic risks.
+                    </p>
+                  </div>
+                </div>
 
-                      {/* Evidence Signals Grid */}
-                      {evidence?.signals && evidence.signals.length > 0 && (
-                        <div>
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                            Contributing Telemetry Signals
-                          </span>
-                          <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
-                            {evidence.signals.map((sig, sIdx) => (
-                              <div
-                                key={sIdx}
-                                className="rounded-lg border border-[#dfe6dd] bg-slate-50/70 p-2.5"
-                              >
-                                <span className="block text-[10px] font-semibold uppercase text-slate-500 truncate">
-                                  {sig.name.replace(/_/g, " ")}
-                                </span>
-                                <div className="mt-1 flex items-baseline gap-1">
-                                  <span className="font-mono text-sm font-bold text-ink">
-                                    {typeof sig.value === "number"
-                                      ? formatNumber(sig.value)
-                                      : String(sig.value)}
-                                  </span>
-                                  {sig.unit && (
-                                    <span className="text-[10px] font-semibold text-slate-500">
-                                      {sig.unit}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => {
+                      if (backendZones.length > 0) setSelectedZoneForReading(backendZones[0].id);
+                      setShowManualReadingModal(true);
+                    }}
+                    className={btnPrimary}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>Ingest Telemetry</span>
+                  </button>
+                  <button onClick={handleRunDetection} disabled={isDetecting} className={btnSecondary}>
+                    <RefreshCw className={`h-3.5 w-3.5 ${isDetecting ? "animate-spin" : ""}`} />
+                    <span>Retry Check</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
-                      {/* Rules Triggered Chips */}
-                      {evidence?.rules_triggered && evidence.rules_triggered.length > 0 && (
-                        <div>
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                            Rules Triggered
-                          </span>
-                          <div className="mt-1.5 flex flex-wrap gap-1.5">
-                            {evidence.rules_triggered.map((rule, rIdx) => (
-                              <span
-                                key={rIdx}
-                                className="rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-700"
-                              >
-                                {rule}
+            {/* ========================================================================= */}
+            {/* STATS OVERVIEW CARDS                                                      */}
+            {/* ========================================================================= */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+              <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-xs">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
+                  Active Risks
+                </span>
+                <span className="text-2xl font-extrabold text-slate-900 mt-1 block">
+                  {risks.filter((r) => r.status !== "resolved").length}
+                </span>
+                <span className="text-[11px] text-slate-500 mt-0.5 block">
+                  Assessed from live telemetry
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-xs">
+                <span className="text-[10px] uppercase font-bold text-rose-600 block tracking-wider">
+                  Critical / High
+                </span>
+                <span className="text-2xl font-extrabold text-rose-700 mt-1 block">
+                  {criticalAndHighCount}
+                </span>
+                <span className="text-[11px] text-rose-600/80 mt-0.5 block">
+                  Requires urgent intervention
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-xs">
+                <span className="text-[10px] uppercase font-bold text-amber-600 block tracking-wider">
+                  Attention Required
+                </span>
+                <span className="text-2xl font-extrabold text-amber-700 mt-1 block">
+                  {warningCount}
+                </span>
+                <span className="text-[11px] text-amber-600/80 mt-0.5 block">
+                  Moderate deviations
+                </span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-xs">
+                <span className="text-[10px] uppercase font-bold text-emerald-600 block tracking-wider">
+                  Resolved Risks
+                </span>
+                <span className="text-2xl font-extrabold text-emerald-700 mt-1 block">
+                  {resolvedCount}
+                </span>
+                <span className="text-[11px] text-emerald-600/80 mt-0.5 block">
+                  Telemetry normalized
+                </span>
+              </div>
+            </div>
+
+            {/* ========================================================================= */}
+            {/* REQUIREMENT 5 & 6: DYNAMIC RISK LIST & EVIDENCE MATRIX                    */}
+            {/* ========================================================================= */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-4">
+                <div className="flex items-center gap-2">
+                  <ShieldAlert className="h-5 w-5 text-rose-600" />
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Active Detected Risks ({filteredRisks.length})
+                  </h3>
+                </div>
+
+                {/* Filter Controls */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Zone Filter */}
+                  <select
+                    value={zoneFilter}
+                    onChange={(e) => setZoneFilter(e.target.value)}
+                    className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-xs outline-none cursor-pointer"
+                  >
+                    <option value="all">All Zones</option>
+                    {backendZones.map((z) => (
+                      <option key={z.id} value={z.id}>{z.name}</option>
+                    ))}
+                  </select>
+
+                  {/* Severity Filter */}
+                  <select
+                    value={severityFilter}
+                    onChange={(e) => setSeverityFilter(e.target.value)}
+                    className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-xs outline-none cursor-pointer"
+                  >
+                    <option value="all">All Severities</option>
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+
+                  {/* Risk Type Filter */}
+                  <select
+                    value={typeFilter}
+                    onChange={(e) => setTypeFilter(e.target.value)}
+                    className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-xs outline-none cursor-pointer"
+                  >
+                    <option value="all">All Risk Types</option>
+                    <option value="water_stress">Water Stress</option>
+                    <option value="pest_disease">Pest & Disease</option>
+                    <option value="nutrient_deficiency">Nutrient Deficiency</option>
+                    <option value="weather_environmental">Weather & Environmental</option>
+                  </select>
+
+                  {/* Status Filter */}
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-xs outline-none cursor-pointer"
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="open">Open</option>
+                    <option value="acknowledged">Acknowledged</option>
+                    <option value="resolved">Resolved</option>
+                  </select>
+                </div>
+              </div>
+
+              {isLoadingRisks ? (
+                <div className="py-12 text-center text-slate-400 space-y-2">
+                  <Loader2 className="h-6 w-6 animate-spin text-emerald-600 mx-auto" />
+                  <p className="text-xs font-semibold">Loading farm risk assessments...</p>
+                </div>
+              ) : filteredRisks.length === 0 ? (
+                <div className="py-12 text-center bg-slate-50/70 border border-dashed border-slate-200 rounded-2xl space-y-2.5">
+                  <ShieldCheck className="h-10 w-10 text-emerald-500 mx-auto" />
+                  <h4 className="text-sm font-bold text-slate-900">
+                    No Active Risks Detected
+                  </h4>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                    All current sensor telemetry streams for {currentFarm.name} are within safe agronomic parameters.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredRisks.map((risk) => {
+                    const sev = getSeverityStyle(risk.severity);
+                    const aiState = aiEvaluations[risk.id];
+                    const isEvaluating = evaluatingRiskId === risk.id;
+                    const zoneObj = backendZones.find((z) => z.id === risk.zone_id);
+                    const zoneName = zoneObj?.name || (risk.zone_id ? `Zone ${risk.zone_id.slice(0, 8)}` : "Whole Farm");
+                    const evidence = (risk.evidence || {}) as { explanation?: string; signals?: unknown[]; rules_triggered?: string[] };
+                    const signals = Array.isArray(evidence.signals) ? evidence.signals : [];
+                    const rules = Array.isArray(evidence.rules_triggered) ? evidence.rules_triggered : [];
+
+                    return (
+                      <div
+                        key={risk.id}
+                        className="rounded-2xl border border-slate-200 bg-slate-50/40 p-5 hover:bg-white hover:border-slate-300 transition-all space-y-4 shadow-xs"
+                      >
+                        {/* Risk Header */}
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold border ${sev.badge}`}>
+                                <span className={`w-2 h-2 rounded-full ${sev.dot}`} />
+                                {risk.severity.toUpperCase()}
                               </span>
-                            ))}
+                              <h4 className="text-sm font-extrabold text-slate-900">
+                                {formatRiskType(risk.risk_type)}
+                              </h4>
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-200/70 text-slate-700 text-[11px] font-semibold">
+                                <Layers className="h-3 w-3 text-slate-500" />
+                                {zoneName}
+                              </span>
+                              <span className="text-[10px] text-slate-400">
+                                Score: {(risk.score * 100).toFixed(0)} / 100
+                              </span>
+                            </div>
+
+                            <p className="text-xs text-slate-600 leading-relaxed pt-1">
+                              {typeof evidence.explanation === "string" && evidence.explanation
+                                ? evidence.explanation
+                                : `Telemetry sensors detected agronomic deviation in ${zoneName}.`}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              onClick={() => handleEvaluateRiskWithAI(risk)}
+                              disabled={isEvaluating}
+                              className={btnPrimary}
+                            >
+                              {isEvaluating ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  <span>Reasoning...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Bot className="h-3.5 w-3.5" />
+                                  <span>Evaluate with AI</span>
+                                </>
+                              )}
+                            </button>
                           </div>
                         </div>
-                      )}
 
-                      {/* Missing Information Notice */}
-                      {risk.missing_information && risk.missing_information.length > 0 && (
-                        <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-2.5 text-[11px] text-amber-900">
-                          <span className="font-semibold">Missing telemetry indicators: </span>
-                          <span>{risk.missing_information.join(", ")}</span>
-                        </div>
-                      )}
-
-                      {/* AI ADVISORY & SAFETY EVALUATION PANEL */}
-                      {(() => {
-                        const aiState = aiEvaluations[risk.id];
-                        const isAiLoading = Boolean(aiState?.loading);
-                        const aiData = aiState?.data;
-                        const aiError = aiState?.error;
-
-                        return (
-                          <div className="mt-3 rounded-xl border border-[#dfe6dd] bg-slate-50/70 p-4 space-y-3">
-                            {/* Panel Header */}
-                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#edf0eb] pb-2.5">
-                              <div className="flex items-center gap-2">
-                                <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-purple-100 text-purple-700">
-                                  <Sparkles size={14} />
-                                </div>
-                                <div>
-                                  <h4 className="text-xs font-bold text-ink flex items-center gap-1.5">
-                                    AI Agronomic Advisory & Safety Guard
-                                  </h4>
-                                  <span className="text-[10px] text-slate-500">
-                                    Domain Agent Reasoning • Deterministic Safety Policies
+                        {/* Agronomic Evidence Signals */}
+                        {signals.length > 0 && (
+                          <div className="rounded-xl bg-white border border-slate-200/80 p-3.5 space-y-2">
+                            <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
+                              Verified Telemetry Evidence & Signals
+                            </span>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                              {(signals as Array<{ name?: string; value?: number | string; unit?: string; threshold?: number | string }>).map((sig, idx) => (
+                                <div key={idx} className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 text-xs">
+                                  <span className="text-slate-500 text-[11px] block capitalize">
+                                    {sig.name ? String(sig.name).replace(/_/g, " ") : "Signal"}
                                   </span>
+                                  <div className="flex items-baseline gap-1.5 mt-0.5">
+                                    <span className="font-extrabold text-slate-900 text-sm">
+                                      {String(sig.value ?? "")} {String(sig.unit ?? "")}
+                                    </span>
+                                    {sig.threshold !== undefined && (
+                                      <span className="text-[10px] text-rose-600 font-semibold">
+                                        (Threshold: {String(sig.threshold)} {String(sig.unit ?? "")})
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
 
-                              <div>
-                                {!aiData && !isAiLoading ? (
-                                  <button
-                                    type="button"
-                                    disabled={!selectedFarmId || isAiLoading}
-                                    onClick={() => void handleEvaluateRiskWithAI(risk)}
-                                    className="inline-flex items-center gap-1.5 rounded-lg bg-purple-700 px-3 py-1.5 text-xs font-semibold text-white shadow-2xs hover:bg-purple-800 disabled:opacity-50 transition-all"
-                                  >
-                                    <Sparkles size={12} />
-                                    Evaluate with AI
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    disabled={isAiLoading}
-                                    onClick={() => void handleEvaluateRiskWithAI(risk)}
-                                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-purple-700 hover:text-purple-900 disabled:opacity-50"
-                                  >
-                                    <RefreshCw size={11} className={isAiLoading ? "animate-spin" : ""} />
-                                    Re-evaluate
-                                  </button>
-                                )}
+                        {/* AI Evaluation Drawer if available */}
+                        {aiState?.data && (
+                          <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 space-y-3 animate-in fade-in duration-200">
+                            <div className="flex items-center justify-between border-b border-emerald-100 pb-2">
+                              <div className="flex items-center gap-2">
+                                <Bot className="h-4 w-4 text-emerald-600" />
+                                <span className="text-xs font-bold text-slate-900">
+                                  AI Agronomist Recommendation ({aiState.data.proposal.agent_type})
+                                </span>
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white">
+                                  Safety Decision: {aiState.data.safety.decision.toUpperCase()}
+                                </span>
                               </div>
                             </div>
 
-                            {/* Loading State */}
-                            {isAiLoading && (
-                              <div className="py-4 flex flex-col items-center justify-center text-center">
-                                <RefreshCw size={20} className="animate-spin text-purple-600 mb-2" />
-                                <p className="text-xs font-semibold text-ink">
-                                  Synthesizing risk context & evaluating agronomic proposal...
-                                </p>
-                                <p className="text-[11px] text-slate-500 mt-0.5">
-                                  Routing through domain agent and verifying via deterministic SafetyGuard.
-                                </p>
+                            <p className="text-xs text-slate-800 font-semibold leading-relaxed">
+                              {aiState.data.proposal.recommendation}
+                            </p>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-slate-600">
+                              <div>
+                                <span>Urgency: </span>
+                                <strong className="text-slate-900 capitalize">{aiState.data.proposal.urgency}</strong>
                               </div>
-                            )}
-
-                            {/* Error State */}
-                            {!isAiLoading && aiError && (
-                              <div className="rounded-lg border border-rose-200 bg-rose-50/80 p-3 text-xs text-rose-950">
-                                <div className="flex items-start gap-2">
-                                  <AlertTriangle size={15} className="mt-0.5 shrink-0 text-rose-600" />
-                                  <div className="space-y-1">
-                                    <p className="font-semibold text-rose-900">AI Evaluation Notice</p>
-                                    <p className="text-rose-800 leading-relaxed">{aiError}</p>
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleEvaluateRiskWithAI(risk)}
-                                      className="mt-1.5 inline-flex items-center gap-1 rounded bg-rose-700 px-2 py-1 text-[10px] font-semibold text-white hover:bg-rose-800"
-                                    >
-                                      Retry AI Evaluation
-                                    </button>
-                                  </div>
-                                </div>
+                              <div>
+                                <span>Confidence: </span>
+                                <strong className="text-emerald-700">
+                                  {Math.round(aiState.data.proposal.confidence * 100)}%
+                                </strong>
                               </div>
-                            )}
-
-                            {/* Un-evaluated State */}
-                            {!isAiLoading && !aiError && !aiData && (
-                              <div className="py-2 text-xs text-slate-500 leading-relaxed">
-                                <span className="font-semibold text-slate-600">AI analysis not run yet.</span> Click &quot;Evaluate with AI&quot; to formulate grounded recommendations for this {formatRiskType(risk.risk_type).toLowerCase()} and evaluate against safety policies.
+                              <div>
+                                <span>Human Approval: </span>
+                                <strong className="text-slate-900">
+                                  {aiState.data.safety.approval_required ? "Required" : "Automated"}
+                                </strong>
                               </div>
-                            )}
+                            </div>
 
-                            {/* Evaluated State (Proposal + SafetyGuard Decision) */}
-                            {!isAiLoading && !aiError && aiData && (() => {
-                              const { proposal, safety } = aiData;
-                              const safetyStyle = getSafetyDecisionStyle(safety.decision, safety.approval_required);
-                              const urgencyStyle = formatUrgencyStyle(proposal.urgency);
-                              const isRejected = safetyStyle.decisionKey === "reject";
-                              const isApprovalRequired = safetyStyle.decisionKey === "approval_required";
-
-                              return (
-                                <div className="space-y-3 pt-1">
-                                  {/* Proposal Badges */}
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <div className="flex flex-wrap items-center gap-1.5">
-                                      <span className="rounded-md bg-purple-100 px-2 py-0.5 text-[10px] font-bold text-purple-800">
-                                        {formatAgentName(proposal.agent_type)}
-                                      </span>
-                                      <span className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${urgencyStyle.badgeClass}`}>
-                                        {urgencyStyle.label}
-                                      </span>
-                                      {proposal.requires_human_review && (
-                                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                                          Human Review Required
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    <div className="text-[11px] font-semibold text-purple-900">
-                                      {Math.round(proposal.confidence * 100)}% model confidence
-                                    </div>
-                                  </div>
-
-                                  {/* Authoritative Deterministic SafetyGuard Decision Banner */}
-                                  <div
-                                    className={`rounded-xl border p-3 text-xs ${safetyStyle.bannerBorderClass} ${safetyStyle.bannerBgClass} ${safetyStyle.textColorClass}`}
-                                  >
-                                    <div className="flex items-start gap-2.5">
-                                      {safetyStyle.decisionKey === "allow" ? (
-                                        <CheckCircle2 size={16} className={`mt-0.5 shrink-0 ${safetyStyle.iconColorClass}`} />
-                                      ) : safetyStyle.decisionKey === "reject" ? (
-                                        <ShieldAlert size={16} className={`mt-0.5 shrink-0 ${safetyStyle.iconColorClass}`} />
-                                      ) : (
-                                        <AlertTriangle size={16} className={`mt-0.5 shrink-0 ${safetyStyle.iconColorClass}`} />
-                                      )}
-                                      <div className="space-y-1 w-full">
-                                        <div className="flex items-center justify-between gap-2">
-                                          <span className="font-bold">{safetyStyle.label}</span>
-                                          <span className={`rounded px-1.5 py-0.2 text-[9px] font-bold uppercase ${safetyStyle.badgeClass}`}>
-                                            {safety.decision}
-                                          </span>
-                                        </div>
-                                        <p className="leading-relaxed text-[11px]">{safety.rationale || safetyStyle.summaryText}</p>
-
-                                        {/* Triggered safety flags if any */}
-                                        {safety.safety_flags && safety.safety_flags.length > 0 && (
-                                          <div className="mt-1 flex flex-wrap gap-1">
-                                            {safety.safety_flags.map((flag, fIdx) => (
-                                              <span
-                                                key={fIdx}
-                                                className="rounded bg-black/5 px-1.5 py-0.5 font-mono text-[9px] font-semibold"
-                                              >
-                                                flag: {flag}
-                                              </span>
-                                            ))}
-                                          </div>
-                                        )}
-
-                                        {/* Safety notes */}
-                                        {proposal.safety_notes && (
-                                          <p className="mt-1 text-[11px] italic opacity-90">
-                                            Safety Note: {proposal.safety_notes}
-                                          </p>
-                                        )}
-
-                                        {/* Non-execution policy reminder */}
-                                        {isApprovalRequired && (
-                                          <p className="mt-1.5 font-semibold text-[10px] text-amber-900">
-                                            Notice: Automated execution is prohibited. Human sign-off is required before any chemical application or field action.
-                                          </p>
-                                        )}
-                                        {isRejected && (
-                                          <p className="mt-1.5 font-semibold text-[10px] text-red-900">
-                                            Prohibited Action: This recommendation has been rejected for safety and cannot be scheduled or executed.
-                                          </p>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  {/* Actionable AI Recommendation */}
-                                  <div className="rounded-lg border border-[#dfe6dd] bg-white p-3 space-y-2">
-                                    <div>
-                                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                                        Recommended Advisory Action
-                                      </span>
-                                      <p className={`mt-0.5 text-xs font-semibold leading-relaxed ${isRejected ? "line-through text-slate-400" : "text-ink"}`}>
-                                        {proposal.recommendation}
-                                      </p>
-                                    </div>
-
-                                    {/* Agronomic Rationale */}
-                                    {proposal.rationale && (
-                                      <div className="border-t border-slate-100 pt-2">
-                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                                          Agronomic Rationale & Grounding
-                                        </span>
-                                        <p className="mt-0.5 text-xs text-slate-600 leading-relaxed">
-                                          {proposal.rationale}
-                                        </p>
-                                      </div>
-                                    )}
-
-                                    {/* Assumptions & Uncertainty */}
-                                    {((proposal.assumptions && proposal.assumptions.length > 0) || proposal.uncertainty) && (
-                                      <div className="border-t border-slate-100 pt-2 space-y-1 text-[11px] text-slate-600">
-                                        {proposal.assumptions && proposal.assumptions.length > 0 && (
-                                          <div>
-                                            <span className="font-semibold text-slate-700">Assumptions: </span>
-                                            <span>{proposal.assumptions.join(" • ")}</span>
-                                          </div>
-                                        )}
-                                        {proposal.uncertainty && (
-                                          <div>
-                                            <span className="font-semibold text-slate-700">Data Uncertainty: </span>
-                                            <span>{proposal.uncertainty}</span>
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-
-                                    {/* Telemetry Evidence References */}
-                                    {proposal.evidence_refs && proposal.evidence_refs.length > 0 && (
-                                      <div className="border-t border-slate-100 pt-2 flex flex-wrap items-center gap-1">
-                                        <span className="text-[10px] font-semibold text-slate-500 mr-1">Evidence Keys:</span>
-                                        {proposal.evidence_refs.map((ref, rIdx) => (
-                                          <span
-                                            key={rIdx}
-                                            className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[9px] text-slate-600"
-                                          >
-                                            {ref}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    )}
-
-                                    {/* Action Plan Bridge */}
-                                    <div className="border-t border-slate-100 pt-3 flex flex-wrap items-center justify-between gap-2">
-                                      {isRejected ? (
-                                        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-rose-800">
-                                          <ShieldAlert size={14} className="text-rose-600 shrink-0" />
-                                          <span>Plan Creation Prohibited: SafetyGuard rejected this recommendation.</span>
-                                        </div>
-                                      ) : planSuccessNotice[risk.id] ? (
-                                        <div className="flex items-center gap-2">
-                                          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
-                                            <CheckCircle2 size={14} className="text-emerald-600" />
-                                            Action Plan Created ({planSuccessNotice[risk.id].slice(0, 8)})
-                                          </span>
-                                          <Link
-                                            href="/plans"
-                                            className="text-xs font-semibold text-forest-700 hover:text-forest-900 underline"
-                                          >
-                                            View in Action Plans →
-                                          </Link>
-                                        </div>
-                                      ) : (
-                                        <button
-                                          type="button"
-                                          disabled={creatingPlanRiskId === risk.id}
-                                          onClick={() => void handleCreatePlanFromAI(risk, aiData)}
-                                          className="inline-flex items-center gap-1.5 rounded-lg bg-forest-700 px-3 py-1.5 text-xs font-semibold text-white shadow-2xs hover:bg-forest-800 transition-colors disabled:opacity-50"
-                                        >
-                                          <ListChecks size={13} />
-                                          {creatingPlanRiskId === risk.id
-                                            ? "Generating Action Plan..."
-                                            : "Create Agronomic Action Plan"}
-                                        </button>
-                                      )}
-
-                                      <span className="text-[10px] text-slate-500 font-medium">
-                                        Human approval required before task dispatch
-                                      </span>
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })()}
+                            <div className="flex justify-end pt-2 border-t border-emerald-100">
+                              <button
+                                onClick={() => handleCreatePlanFromAI(risk, aiState.data!)}
+                                disabled={creatingPlanRiskId === risk.id || Boolean(planSuccessNotice[risk.id])}
+                                className={btnPrimary}
+                              >
+                                {creatingPlanRiskId === risk.id ? (
+                                  <>
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    <span>Generating Plan...</span>
+                                  </>
+                                ) : planSuccessNotice[risk.id] ? (
+                                  <>
+                                    <Check className="h-3.5 w-3.5" />
+                                    <span>Plan Approved & Dispatched</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <CheckCircle2 className="h-3.5 w-3.5" />
+                                    <span>Approve & Create Action Plan</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
                           </div>
-                        );
-                      })()}
+                        )}
 
-                      {/* Footer Metadata */}
-                      <div className="mt-3 flex flex-wrap items-center justify-between border-t border-[#edf0eb] pt-3 text-[11px] text-slate-500">
-                        <div className="flex items-center gap-3">
-                          <span className="inline-flex items-center gap-1">
-                            <Activity size={12} className="text-slate-400" />
-                            Agent: {risk.agent} (v{risk.agent_version})
+                        {/* Footer Info */}
+                        <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-100">
+                          <span className="flex items-center gap-1.5">
+                            <Clock className="h-3.5 w-3.5 text-slate-400" />
+                            <span>Detected: {formatIST(risk.created_at)}</span>
                           </span>
-                          <span>•</span>
-                          <span className="inline-flex items-center gap-1 font-mono">
-                            <Clock size={12} className="text-slate-400" />
-                            {new Date(risk.created_at).toLocaleString()}
-                          </span>
+                          <span>Detector Agent: <strong className="text-slate-600">{risk.agent}</strong></span>
                         </div>
-
-                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                          Advisory Diagnostic • Human Confirmation Required
-                        </span>
                       </div>
-                    </div>
-                  </Card>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      )}
+          </>
+        )}
 
-      {/* TAB 2: Dataset Provenance & Rigorous Audit Findings */}
-      {activeTab === "provenance" && (
-        <div className="mt-6 space-y-6">
-          <Card className="p-6">
-            <h3 className="text-sm font-bold text-ink mb-3">
-              Dataset Provenance & Rigorous Audit Findings
-            </h3>
-            <p className="text-xs text-slate-600 leading-relaxed">
-              To adhere strictly to data integrity standards, FarmOps AI performs automated RFC4180 parsing and statistical verification against the local raw datasets. The following audit findings are established for the research archives:
-            </p>
-
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-              <div className="rounded-xl border border-[#dfe6dd] bg-slate-50/70 p-4 space-y-2">
-                <span className="font-bold text-ink block">
-                  1. Edge Assisted Agricultural Sensor Dataset
-                </span>
-                <ul className="list-disc pl-4 space-y-1 text-slate-600">
-                  <li><strong>Record Count:</strong> Exactly 2,000 rows, 12 columns.</li>
-                  <li><strong>Date Range:</strong> 2024-01-01 00:00:00 to 2024-03-24 07:00:00.</li>
-                  <li><strong>Timezone:</strong> Undocumented in source CSV header.</li>
-                  <li><strong>Units:</strong> Only <code>5G_Latency_ms</code> explicitly defines its unit (ms).</li>
-                  <li><strong>Statistical Anomaly:</strong> NDVI mean is 0.57 across all 3 classes (Healthy, Moderate_Stress, High_Stress), showing that NDVI alone in this dataset is not a discriminant.</li>
-                </ul>
-              </div>
-
-              <div className="rounded-xl border border-[#dfe6dd] bg-slate-50/70 p-4 space-y-2">
-                <span className="font-bold text-ink block">
-                  2. Soil Moisture Sensor Network (Station CAF003)
-                </span>
-                <ul className="list-disc pl-4 space-y-1 text-slate-600">
-                  <li><strong>Audit Finding:</strong> Contains 889 duplicate timestamp rows.</li>
-                  <li><strong>Missing Values:</strong> Sensor dropouts encoded as <code>NA</code>.</li>
-                  <li><strong>Adapter Handling:</strong> Server adapter enforces deduplication and drops invalid rows without synthetic interpolation.</li>
-                  <li><strong>Application:</strong> Deep subsoil moisture profiles (VW_60cm and VW_90cm) used as illustrative benchmark references only.</li>
-                </ul>
-              </div>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* TAB 3: Physical Telemetry Pipeline Status */}
-      {activeTab === "telemetry" && (
-        <div className="mt-6 space-y-6">
-          <Card className="p-6">
-            <div className="flex items-center gap-3">
-              <Radio size={20} className="text-rose-600" />
-              <div>
-                <h3 className="text-sm font-bold text-ink">
-                  Hardware Telemetry Gateway Status
+        {/* ========================================================================= */}
+        {/* MODAL: MANUAL FIELD TELEMETRY INGESTION                                   */}
+        {/* ========================================================================= */}
+        {showManualReadingModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+            <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl border border-slate-200 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-emerald-600" />
+                  <span>Ingest Live Field Telemetry</span>
                 </h3>
-                <p className="text-xs text-slate-500">
-                  Live connection audit across field buses and wireless sensor nodes.
-                </p>
+                <button onClick={() => setShowManualReadingModal(false)} className="text-slate-400 hover:text-slate-600">
+                  <X className="h-4 w-4" />
+                </button>
               </div>
-            </div>
 
-            <div className="mt-5 space-y-3">
-              <div className="flex items-center justify-between rounded-lg border border-[#dfe6dd] p-3 text-xs">
+              <form onSubmit={handleRecordReading} className="space-y-3.5">
                 <div>
-                  <strong className="text-ink block">MQTT Telemetry Broker</strong>
-                  <span className="text-slate-500">broker.farmops.local:1883</span>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1">Target Zone</label>
+                  <select
+                    value={selectedZoneForReading}
+                    onChange={(e) => setSelectedZoneForReading(e.target.value)}
+                    className={inputStyle}
+                  >
+                    {backendZones.map((z) => (
+                      <option key={z.id} value={z.id}>
+                        {z.name} ({z.crop || "Crop"})
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-                  Disconnected (No Hardware Deployed)
-                </span>
-              </div>
 
-              <div className="flex items-center justify-between rounded-lg border border-[#dfe6dd] p-3 text-xs">
-                <div>
-                  <strong className="text-ink block">LoRaWAN Gateway (868/915 MHz)</strong>
-                  <span className="text-slate-500">Soil moisture probe array / ambient weather station</span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-700 block mb-1">Soil Moisture (% VWC)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      required
+                      value={manualMoisture}
+                      onChange={(e) => setManualMoisture(e.target.value)}
+                      className={inputStyle}
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">&lt;25% triggers Water Stress</span>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-700 block mb-1">Ambient Temperature (°C)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      required
+                      value={manualTemp}
+                      onChange={(e) => setManualTemp(e.target.value)}
+                      className={inputStyle}
+                    />
+                  </div>
                 </div>
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-                  No InfluxDB Stream
-                </span>
-              </div>
 
-              <div className="flex items-center justify-between rounded-lg border border-[#dfe6dd] p-3 text-xs">
-                <div>
-                  <strong className="text-ink block">Actuator & Solenoid Control Bus</strong>
-                  <span className="text-slate-500">Drip irrigation zone valves / dosing pumps</span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-700 block mb-1">Relative Humidity (%)</label>
+                    <input
+                      type="number"
+                      step="1"
+                      required
+                      value={manualHumidity}
+                      onChange={(e) => setManualHumidity(e.target.value)}
+                      className={inputStyle}
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">&gt;80% triggers Pest Risk</span>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-700 block mb-1">Soil pH</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      required
+                      value={manualPh}
+                      onChange={(e) => setManualPh(e.target.value)}
+                      className={inputStyle}
+                    />
+                  </div>
                 </div>
-                <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
-                  Hardware Commands Prohibited (Advisory Only)
-                </span>
-              </div>
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                  <button type="button" onClick={() => setShowManualReadingModal(false)} className={btnSecondary}>
+                    Cancel
+                  </button>
+                  <button type="submit" disabled={isSubmittingReading} className={btnPrimary}>
+                    {isSubmittingReading ? "Submitting..." : "Ingest Telemetry"}
+                  </button>
+                </div>
+              </form>
             </div>
-
-            <div className="mt-5 rounded-lg bg-slate-50 p-3 text-xs text-slate-600 leading-relaxed">
-              <strong>System Boundary:</strong> FarmOps AI operates exclusively as an advisory workspace. Even if physical hardware is connected in future phases, agricultural actuation (pumps, fertilizer applicators, sprayers) will remain subject to manual farmer verification and dispatch.
-            </div>
-          </Card>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </AppShell>
   );
 }

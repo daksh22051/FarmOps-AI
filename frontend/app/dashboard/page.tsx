@@ -1,123 +1,17 @@
 "use client";
 
-import React from "react";
 import Link from "next/link";
-import { Leaf, Sprout, Plus, Loader2 } from "lucide-react";
+import { Loader2, Plus, Sprout } from "lucide-react";
 import { AppShell } from "../../components/app-shell";
 import { useFarm } from "../../context/farm-context";
-import { DashboardGreeting } from "./dashboard-greeting";
-import { DashboardMetrics } from "./dashboard-metrics";
-import { FarmSatelliteMap } from "./farm-satellite-map";
-import { WeatherCard } from "./weather-card";
-import { LatestAlertsCard } from "./latest-alerts-card";
-import { ZoneHealthCard } from "./zone-health-card";
-import { RecentTasksCard } from "./recent-tasks-card";
-import { RiskSummaryCard } from "./risk-summary-card";
+import { OperationalDashboard } from "./operational-dashboard";
 
 export default function DashboardPage() {
-  const { currentUser, backendFarms, isLoadingFarms } = useFarm();
-
-  // Loading state while checking user's farms from FastAPI backend
-  if (isLoadingFarms && backendFarms.length === 0) {
-    return (
-      <AppShell title="Dashboard">
-        <div className="flex flex-col items-center justify-center py-28 text-center">
-          <Loader2 size={32} className="animate-spin text-emerald-700 mb-3" />
-          <p className="text-sm font-semibold text-slate-700">Connecting to FarmOps...</p>
-        </div>
-      </AppShell>
-    );
-  }
-
-  // Proper empty state for a new farmer with zero backend farms
-  if (!isLoadingFarms && backendFarms.length === 0) {
-    const userMeta = (currentUser?.user_metadata || {}) as Record<string, unknown>;
-    const farmerName =
-      (typeof userMeta.full_name === "string" ? userMeta.full_name : null) ||
-      (typeof userMeta.name === "string" ? userMeta.name : null) ||
-      (currentUser?.email ? currentUser.email.split("@")[0] : "");
-
-    return (
-      <AppShell title="Dashboard">
-        <div className="flex flex-col items-center justify-center py-20 px-4 text-center max-w-xl mx-auto">
-          <div className="h-16 w-16 rounded-2xl bg-emerald-100 flex items-center justify-center text-emerald-700 mb-5 shadow-xs">
-            <Sprout size={32} />
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-            Welcome{farmerName ? `, ${farmerName}` : ""} 👋
-          </h1>
-          <p className="mt-3 text-base font-semibold text-slate-700">
-            You haven&apos;t created your first farm yet.
-          </p>
-          <p className="mt-1 text-xs text-slate-500 leading-relaxed max-w-md">
-            Set up your operational farm boundaries, define management zones, and connect sensor telemetry to unlock automated risk detection and agronomic advisory.
-          </p>
-          <Link
-            href="/onboarding"
-            className="mt-6 inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-6 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-800 transition-all"
-          >
-            <Plus size={16} />
-            <span>Create Your First Farm</span>
-          </Link>
-        </div>
-      </AppShell>
-    );
-  }
-
-  return (
-    <AppShell title="Dashboard">
-      <div className="space-y-6">
-        {/* ============================================================ */}
-        {/* 1. GREETING & DATE BANNER                                    */}
-        {/* ============================================================ */}
-        <DashboardGreeting />
-
-        {/* ============================================================ */}
-        {/* 2. FIVE KPI SUMMARY CARDS (Zones, Devices, Risks, Tasks, Alerts) */}
-        {/* ============================================================ */}
-        <DashboardMetrics />
-
-        {/* ============================================================ */}
-        {/* 3. MIDDLE SECTION: Farm Satellite Map + Weather & Alerts     */}
-        {/* ============================================================ */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
-          {/* Farm Overview with Real Selected Farm Data (65% width) */}
-          <div className="lg:col-span-7 xl:col-span-8">
-            <FarmSatelliteMap />
-          </div>
-
-          {/* Right Column: Live Weather & Latest Alerts (35% width) */}
-          <div className="lg:col-span-5 xl:col-span-4 flex flex-col gap-5">
-            <WeatherCard />
-            <LatestAlertsCard />
-          </div>
-        </div>
-
-        {/* ============================================================ */}
-        {/* 4. BOTTOM THREE COLUMNS: Zone Health, Recent Tasks, Risks    */}
-        {/* ============================================================ */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          <ZoneHealthCard />
-          <RecentTasksCard />
-          <RiskSummaryCard />
-        </div>
-
-        {/* ============================================================ */}
-        {/* 5. FOOTER BANNER                                             */}
-        {/* ============================================================ */}
-        <div className="rounded-xl border border-slate-200/60 bg-white/80 px-4 py-3 text-xs flex flex-col sm:flex-row items-center justify-between gap-2 shadow-2xs">
-          <div className="flex items-center gap-2 text-slate-600 font-medium">
-            <div className="h-4 w-4 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 shrink-0">
-              <Leaf size={10} className="fill-current" />
-            </div>
-            <span>Data-driven farming for a better tomorrow.</span>
-          </div>
-          <div className="flex items-center gap-1.5 font-extrabold text-slate-800 text-xs">
-            <span className="text-emerald-700">FarmOps</span>
-            <span>AI</span>
-          </div>
-        </div>
-      </div>
-    </AppShell>
-  );
+  const { backendFarms, isLoadingFarms, isHydrated, selectedFarm, selectedFarmId, farmError, authError, refreshFarms } = useFarm();
+  const farm = selectedFarm?.id === selectedFarmId ? selectedFarm : backendFarms.find(f => f.id === selectedFarmId);
+  if (farm) return <AppShell title="Dashboard"><OperationalDashboard key={farm.id} farm={farm} /></AppShell>;
+  const error = farmError || authError;
+  if (error) return <AppShell title="Dashboard"><div role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-6"><h1 className="font-bold">Could not load your farms</h1><p className="text-sm mt-2">{error.message}</p><button onClick={() => void refreshFarms()} className="mt-4 rounded-lg bg-emerald-700 px-4 py-2 text-white">Retry</button><Link href="/login" className="ml-4 text-sm underline">Sign in</Link></div></AppShell>;
+  if (!isHydrated || isLoadingFarms || backendFarms.length > 0) return <AppShell title="Dashboard"><div role="status" className="flex items-center justify-center gap-3 py-28 text-slate-600"><Loader2 className="animate-spin" size={24} />Connecting to your farm…</div></AppShell>;
+  return <AppShell title="Dashboard"><div className="mx-auto max-w-lg py-20 text-center"><Sprout size={40} className="mx-auto text-emerald-700" /><h1 className="mt-4 text-3xl font-extrabold">Start with your farm</h1><p className="mt-3 text-slate-500">Add your farm and crop zones, then connect sensors or record field readings to monitor risks and plan work.</p><Link href="/onboarding" className="mt-6 inline-flex gap-2 items-center rounded-xl bg-emerald-700 px-5 py-3 font-bold text-white"><Plus size={18} />Create your first farm</Link></div></AppShell>;
 }

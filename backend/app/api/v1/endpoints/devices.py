@@ -111,3 +111,31 @@ async def list_farm_devices_alias(
         success=True,
         data=[DeviceResponse.from_orm_device(d) for d in devices],
     )
+
+
+@router.delete("/{device_id}", response_model=APIResponse[bool])
+async def delete_device(
+    device_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Deletes a device by ID."""
+    device = await verify_device_access(device_id=device_id, db=db, user=user)
+    await check_farm_access(
+        db,
+        farm_id=device.farm_id,
+        user=user,
+        allowed_roles=["owner", "manager"],
+    )
+    farm_id = device.farm_id
+    await DeviceService.delete_device(db, device_id=device_id)
+    await AuditService.log_event(
+        session=db,
+        event_type="delete_device",
+        entity_type="device",
+        farm_id=farm_id,
+        entity_id=device_id,
+        actor_id=user.id,
+        source="user",
+    )
+    return APIResponse(success=True, data=True, message="Device deleted successfully")

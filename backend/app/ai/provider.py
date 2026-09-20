@@ -37,6 +37,7 @@ class AIProviderInterface(ABC):
 class GeminiProvider(AIProviderInterface):
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.client = GeminiClient(api_key=api_key, model=model)
+        self.fallback = MockAIProvider()
 
     async def generate_response(
         self,
@@ -44,11 +45,19 @@ class GeminiProvider(AIProviderInterface):
         system_instruction: Optional[str] = None,
         context_data: Optional[Dict[str, Any]] = None,
     ) -> str:
-        return await self.client.generate_text(
-            prompt=prompt,
-            system_instruction=system_instruction,
-            context_data=context_data,
-        )
+        try:
+            return await self.client.generate_text(
+                prompt=prompt,
+                system_instruction=system_instruction,
+                context_data=context_data,
+            )
+        except Exception as e:
+            logger.warning(f"GeminiProvider generate_response failed: {e}. Gracefully falling back to agronomic expert rules.")
+            return await self.fallback.generate_response(
+                prompt=prompt,
+                system_instruction=system_instruction,
+                context_data=context_data,
+            )
 
     async def generate_json(
         self,
@@ -56,11 +65,19 @@ class GeminiProvider(AIProviderInterface):
         system_instruction: Optional[str] = None,
         context_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return await self.client.generate_json(
-            prompt=prompt,
-            system_instruction=system_instruction,
-            context_data=context_data,
-        )
+        try:
+            return await self.client.generate_json(
+                prompt=prompt,
+                system_instruction=system_instruction,
+                context_data=context_data,
+            )
+        except Exception as e:
+            logger.warning(f"GeminiProvider generate_json failed: {e}. Gracefully falling back to agronomic expert rules.")
+            return await self.fallback.generate_json(
+                prompt=prompt,
+                system_instruction=system_instruction,
+                context_data=context_data,
+            )
 
 
 class MockAIProvider(AIProviderInterface):
@@ -113,34 +130,83 @@ class MockAIProvider(AIProviderInterface):
         risk_type = (risk.get("risk_type") or "").lower()
 
         if "(PEST_DISEASE_AGENT)" in sys_inst or risk_type == "pest_disease":
-            humidity = telemetry.get("air_humidity", 85.0)
+            humidity = telemetry.get("air_humidity")
+            # Only cite a humidity figure when one was actually measured. A missing
+            # reading must stay missing rather than being defaulted into the rationale.
+            if humidity is None:
+                rationale = (
+                    "Reported conditions are consistent with a microclimate that can favour "
+                    "fungal spore germination, but no humidity reading was available for this zone."
+                )
+                confidence = 0.45
+                evidence_refs: list = []
+                missing = ["air_humidity"]
+            else:
+                rationale = (
+                    f"Measured relative humidity ({humidity}%) together with warm canopy temperatures "
+                    f"creates a microclimate in which spore germination is more likely."
+                )
+                confidence = 0.62
+                evidence_refs = ["air_humidity", "air_temperature"]
+                missing = []
             return {
                 "agent_type": "PEST_DISEASE_AGENT",
                 "risk_type": "pest_disease",
-                "recommendation": "Microclimate conditions indicate elevated risk of fungal pathogen development; field scouting is recommended.",
-                "rationale": f"Sustained high relative humidity ({humidity}%) and warm canopy temperatures create favorable microclimate for spore germination.",
-                "confidence": 0.82,
+                "recommendation": "Scout the affected zone for foliar symptoms; this is a risk candidate, not a confirmed diagnosis.",
+                "rationale": rationale,
+                "confidence": confidence,
                 "urgency": "medium",
-                "evidence_refs": ["air_humidity", "air_temperature"],
-                "assumptions": ["Canopy microclimate aligns with edge sensor readings"],
-                "uncertainty": "Visual foliar symptoms require on-site agronomist scouting to confirm presence of spores.",
+                "evidence_refs": evidence_refs,
+                "assumptions": ["Canopy microclimate is comparable to the edge sensor location"],
+                "uncertainty": (
+                    "No imagery or laboratory confirmation is available. Visual foliar symptoms must be "
+                    "confirmed on site before any pathogen is named."
+                    + (f" Missing inputs: {', '.join(missing)}." if missing else "")
+                ),
                 "requires_human_review": True,
-                "safety_notes": "Advisory proposal only. Do not apply chemical pesticides without confirmed diagnosis and human review.",
+                "safety_notes": "Advisory proposal only. Do not apply chemical pesticides without a confirmed diagnosis and human review.",
             }
 
         elif "(NUTRIENT_AGENT)" in sys_inst or risk_type == "nutrient_deficiency":
+            # Report only nutrient values that were actually measured, and never propose a
+            # product or dosage — soil sampling is the correct next step for this agent.
+            nutrient_keys = ("nitrogen", "phosphorus", "potassium", "soil_ph", "ph")
+            measured = {k: telemetry[k] for k in nutrient_keys if telemetry.get(k) is not None}
+            missing = [k for k in ("nitrogen", "phosphorus", "potassium") if telemetry.get(k) is None]
+            if measured:
+                readings = ", ".join(f"{k}={v}" for k, v in measured.items())
+                rationale = (
+                    f"Available soil readings ({readings}) sit outside the configured comfortable range "
+                    f"for this crop, which is consistent with a nutrient availability problem."
+                )
+                confidence = 0.55 if missing else 0.7
+            else:
+                rationale = (
+                    "No soil nutrient readings were available for this zone, so the deficiency cannot be "
+                    "characterised from telemetry alone."
+                )
+                confidence = 0.35
             return {
                 "agent_type": "NUTRIENT_AGENT",
                 "risk_type": "nutrient_deficiency",
-                "recommendation": "Perform localized soil core sampling and test available nitrogen/potassium before amending soil.",
-                "rationale": "Telemetry indicates depleted available macronutrients below minimum vegetative stage baseline.",
-                "confidence": 0.78,
+                "recommendation": (
+                    "Collect a soil sample from the affected zone and review the laboratory result with an "
+                    "agronomist before any corrective nutrient application is planned."
+                ),
+                "rationale": rationale,
+                "confidence": confidence,
                 "urgency": "medium",
-                "evidence_refs": ["nitrogen", "soil_ph"],
-                "assumptions": ["Root zone nutrient sensor is properly calibrated"],
-                "uncertainty": "Subsoil nutrient stratification and organic matter mineralization rates are not measured directly.",
+                "evidence_refs": list(measured.keys()),
+                "assumptions": ["Soil nutrient sensor placement is representative of the zone"],
+                "uncertainty": (
+                    "Sensor-derived nutrient values are indicative only and do not replace a laboratory soil test."
+                    + (f" No reading available for: {', '.join(missing)}." if missing else "")
+                ),
                 "requires_human_review": True,
-                "safety_notes": "Advisory only. Exact chemical fertilizer dosages must be formulated by a certified agronomist.",
+                "safety_notes": (
+                    "Advisory only. This system does not calculate fertilizer products, blends or dosages; "
+                    "those must come from a soil test interpreted by a qualified agronomist."
+                ),
             }
 
         elif "(MARKET_CONTEXT_AGENT)" in sys_inst or risk_type == "market_exposure":
@@ -174,19 +240,37 @@ class MockAIProvider(AIProviderInterface):
             }
 
         elif "(WATER_AGENT)" in sys_inst or risk_type == "water_stress" or "irrigation" in risk_type:
-            moisture = telemetry.get("soil_moisture") or risk.get("evidence", {}).get("signals", [{}])[0].get("value", 18.5)
+            moisture = telemetry.get("soil_moisture")
+            if moisture is None:
+                signals = risk.get("evidence", {}).get("signals") or [{}]
+                moisture = signals[0].get("value")
+            if moisture is None:
+                # No measurement to reason from: say so instead of assuming a value.
+                return {
+                    "agent_type": "WATER_AGENT",
+                    "risk_type": "water_stress",
+                    "recommendation": "Check the affected zone in person; no soil moisture reading is available to assess irrigation need.",
+                    "rationale": "No soil moisture measurement was available for this zone at assessment time.",
+                    "confidence": 0.3,
+                    "urgency": "medium",
+                    "evidence_refs": [],
+                    "assumptions": [],
+                    "uncertainty": "Soil moisture is missing; the zone may or may not be water stressed.",
+                    "requires_human_review": True,
+                    "safety_notes": "Advisory only. This system does not operate irrigation equipment.",
+                }
             return {
                 "agent_type": "WATER_AGENT",
                 "risk_type": "water_stress",
                 "recommendation": f"Review irrigation need for affected zone due to persistent low soil moisture ({moisture}%).",
-                "rationale": f"Observed soil moisture ({moisture}%) is below optimal vegetative threshold with dry atmospheric conditions.",
-                "confidence": 0.88,
+                "rationale": f"Observed soil moisture ({moisture}%) is below the configured comfortable range for this crop stage.",
+                "confidence": 0.75,
                 "urgency": "high" if float(moisture) < 20.0 else "medium",
                 "evidence_refs": ["soil_moisture", "air_temperature"],
                 "assumptions": ["Sensor calibration is accurate", "Drip irrigation system operational"],
                 "uncertainty": "Long-range weather forecast precipitation volume remains uncertain.",
                 "requires_human_review": True,
-                "safety_notes": "Do not exceed zone hydraulic pressure limits or over-saturate root zone.",
+                "safety_notes": "Advisory only. This system does not operate irrigation equipment; do not over-saturate the root zone.",
             }
 
         return {

@@ -331,7 +331,14 @@ async def test_18_cross_farm_observation_rejected_with_403(client: AsyncClient, 
     # Other user token
     import jwt
     other_token = jwt.encode(
-        {"sub": "intruder-user-777", "email": "intruder@example.com", "role": "authenticated"},
+        {
+            "sub": "intruder-user-777",
+            "email": "intruder@example.com",
+            "role": "authenticated",
+            # Must carry `exp`: without it the token is rejected as malformed (401)
+            # and the cross-tenant authorization path under test is never reached.
+            "exp": (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp(),
+        },
         settings.SUPABASE_JWT_SECRET,
         algorithm=settings.SUPABASE_JWT_ALGORITHM,
     )

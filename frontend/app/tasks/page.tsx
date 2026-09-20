@@ -501,12 +501,44 @@ export default function TasksPage() {
 
           {/* Empty State */}
           {!isLoadingTasks && !tasksError && tasks.length === 0 && (
-            <Card className="p-10 text-center">
-              <ListChecks size={28} className="mx-auto text-slate-400 mb-2" />
-              <h4 className="text-sm font-bold text-ink">No Tasks Found</h4>
-              <p className="mt-1 text-xs text-slate-500 max-w-sm mx-auto">
-                No field tasks are recorded for this farm. Approve an action plan or create a manual field task to get started.
+            <Card className="p-10 text-center flex flex-col items-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 mb-3 border border-emerald-100">
+                <ListChecks size={24} />
+              </div>
+              <h4 className="text-base font-bold text-ink">No Tasks Found</h4>
+              <p className="mt-1 text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                No field tasks are recorded for this farm yet. Tasks are generated automatically when you approve an AI action plan, or you can create one directly.
               </p>
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFormTitle("");
+                    setFormZoneId(backendZones[0]?.id || "");
+                    setFormPriority("medium");
+                    setFormDueDate("");
+                    setFormNotes("");
+                    setFormError("");
+                    setShowCreateModal(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 transition-all cursor-pointer"
+                >
+                  <Plus size={14} />
+                  <span>Create Field Task</span>
+                </button>
+                <a
+                  href="/plans"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 transition-all"
+                >
+                  <span>Review Action Plans</span>
+                </a>
+                <a
+                  href="/demo"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 transition-all"
+                >
+                  <span>Demo Controls</span>
+                </a>
+              </div>
             </Card>
           )}
 

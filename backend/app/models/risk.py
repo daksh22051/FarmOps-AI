@@ -31,9 +31,9 @@ class RiskAssessment(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     agent_version: Mapped[str] = mapped_column(String(32), default="1.0.0", nullable=False)
 
     # Relationships
-    action_plans: Mapped[List["ActionPlan"]] = relationship("ActionPlan", back_populates="risk_assessment", lazy="selectin")
-    alerts: Mapped[List["Alert"]] = relationship("Alert", back_populates="risk", lazy="selectin")
-    escalations: Mapped[List["Escalation"]] = relationship("Escalation", back_populates="risk", lazy="selectin")
+    action_plans: Mapped[List["ActionPlan"]] = relationship("ActionPlan", back_populates="risk_assessment", lazy="select")
+    alerts: Mapped[List["Alert"]] = relationship("Alert", back_populates="risk", lazy="select")
+    escalations: Mapped[List["Escalation"]] = relationship("Escalation", back_populates="risk", lazy="select")
 
     __table_args__ = (
         Index("ix_risk_status_severity", "status", "severity"),

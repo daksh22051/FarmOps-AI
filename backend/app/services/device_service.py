@@ -111,3 +111,10 @@ class DeviceService:
         query = select(Device).where(Device.credential_reference == credential_ref)
         result = await session.execute(query)
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def delete_device(session: AsyncSession, device_id: str) -> None:
+        """Deletes a device by ID."""
+        device = await DeviceService.get_device(session, device_id)
+        await session.delete(device)
+        await session.commit()

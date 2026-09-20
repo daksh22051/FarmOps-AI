@@ -18,6 +18,14 @@ class TaskStatus(str, Enum):
     BLOCKED = "blocked"
 
 
+class TaskStatusTransition(BaseModel):
+    """Request body for an explicit task status transition."""
+
+    status: TaskStatus = Field(..., description="Target status; must be a legal transition")
+    note: Optional[str] = Field(None, max_length=2000, description="Why the task moved, e.g. the blocking reason")
+    evidence_url: Optional[str] = Field(None, max_length=1000, description="Link to a photo or document supporting the change")
+
+
 class TaskBase(BaseModel):
     zone_id: Optional[str] = None
     assignee_id: Optional[str] = None

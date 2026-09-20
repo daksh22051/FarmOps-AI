@@ -28,6 +28,8 @@ class ActionPlanService:
         zone_id: Optional[str] = None,
         risk_id: Optional[str] = None,
         actor_id: Optional[str] = None,
+        earliest_at: Optional[datetime] = None,
+        latest_at: Optional[datetime] = None,
     ) -> ActionPlan:
         """
         Builds an ActionPlan from a validated AIProposal and evaluates it through the Deterministic Safety Guard.
@@ -80,6 +82,8 @@ class ActionPlanService:
             source_risk_ids=[risk_id] if risk_id else None,
             action_type=proposal.agent_type,
             action_summary=proposal.recommendation,
+            earliest_at=earliest_at,
+            latest_at=latest_at,
             priority=proposal.urgency,
             confidence=proposal.confidence,
             evidence=evidence,
@@ -180,6 +184,8 @@ class ActionPlanService:
                 session=session,
                 farm_id=farm_id,
                 proposal=data.ai_proposal,
+                earliest_at=data.earliest_at,
+                latest_at=data.latest_at,
                 zone_id=data.zone_id,
                 risk_id=data.risk_id,
                 actor_id=actor_id,
@@ -228,6 +234,8 @@ class ActionPlanService:
             action_type=action_type,
             action_summary=action_summary,
             priority=data.priority,
+            earliest_at=data.earliest_at,
+            latest_at=data.latest_at,
             confidence=data.confidence,
             evidence=evidence,
             estimated_cost=data.estimated_cost,
@@ -410,6 +418,83 @@ class ActionPlanService:
             severity="warning",
             message=f"Action Plan rejected by agronomist: {plan.action_summary}",
             dedupe_key=f"action_plan_rejected:{plan.id}",
+        )
+
+        await session.commit()
+        await session.refresh(plan)
+        return plan
+
+    @staticmethod
+    async def reschedule_plan(
+        session: AsyncSession,
+        plan_id: str,
+        reviewer_id: str,
+        earliest_at: Optional[datetime] = None,
+        latest_at: Optional[datetime] = None,
+        review_notes: Optional[str] = None,
+    ) -> ActionPlan:
+        """Move a plan's action window, keeping its history and the stated reason.
+
+        The plan returns to `pending_approval` because the window the original
+        decision was made against no longer applies. The previous window is kept in
+        the audit trail and the version is bumped so the change is traceable.
+        """
+        plan = await ActionPlanService.get_plan(session, plan_id)
+
+        if plan.approval_state in ["completed", "cancelled", "rejected"]:
+            raise FarmOpsException(
+                status_code=409,
+                detail=f"Cannot reschedule an action plan in '{plan.approval_state}' state.",
+                code="ILLEGAL_PLAN_TRANSITION",
+            )
+
+        if earliest_at is None and latest_at is None:
+            raise FarmOpsException(
+                status_code=422,
+                detail="A reschedule must supply at least one of earliest_at or latest_at.",
+                code="VALIDATION_ERROR",
+            )
+
+        previous = {
+            "approval_state": plan.approval_state,
+            "earliest_at": plan.earliest_at.isoformat() if plan.earliest_at else None,
+            "latest_at": plan.latest_at.isoformat() if plan.latest_at else None,
+            "version": plan.version,
+        }
+
+        new_earliest = earliest_at or plan.earliest_at
+        new_latest = latest_at or plan.latest_at
+        if new_earliest and new_latest and new_latest < new_earliest:
+            raise FarmOpsException(
+                status_code=422,
+                detail="The action window cannot end before it starts.",
+                code="VALIDATION_ERROR",
+            )
+
+        plan.earliest_at = new_earliest
+        plan.latest_at = new_latest
+        plan.approval_state = "pending_approval"
+        plan.version = (plan.version or 1) + 1
+        if review_notes:
+            plan.rationale = f"{plan.rationale or ''}\nReschedule note: {review_notes}".strip()
+
+        session.add(
+            AuditEvent(
+                farm_id=plan.farm_id,
+                entity_type="action_plan",
+                entity_id=plan.id,
+                actor_id=reviewer_id,
+                event_type="action_plan_rescheduled",
+                source="user",
+                before_state=previous,
+                after_state={
+                    "approval_state": plan.approval_state,
+                    "earliest_at": plan.earliest_at.isoformat() if plan.earliest_at else None,
+                    "latest_at": plan.latest_at.isoformat() if plan.latest_at else None,
+                    "version": plan.version,
+                    "reason": review_notes,
+                },
+            )
         )
 
         await session.commit()

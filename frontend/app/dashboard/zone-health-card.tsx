@@ -6,19 +6,37 @@ import { ArrowRight, Sprout } from "lucide-react";
 import { useFarm } from "../../context/farm-context";
 
 export function ZoneHealthCard() {
-  const { backendZones } = useFarm();
+  const { backendZones, backendRisks } = useFarm();
 
+  // Zone standing is derived from open risk candidates for that zone. There is no
+  // "health %" available from the backend, so none is displayed — inventing one
+  // would put a fabricated number in front of the farmer.
   const displayZones = backendZones.slice(0, 4).map((z) => {
-    const name = z.name;
-    const crop = z.crop || "Unassigned";
+    const openRisks = (backendRisks || []).filter(
+      (r) => r.zone_id === z.id && (r.status === "open" || r.status === "acknowledged")
+    );
+    const worst = openRisks.some((r) => r.severity === "critical" || r.severity === "high")
+      ? "high"
+      : openRisks.length > 0
+      ? "moderate"
+      : "clear";
     return {
       id: z.id,
-      name,
-      crop,
-      health: 85,
-      status: z.status === "active" ? "Good" : z.status === "fallow" ? "Fallow" : "Prepared",
-      barColor: z.status === "active" ? "bg-emerald-500" : "bg-amber-400",
-      textColor: z.status === "active" ? "text-emerald-700" : "text-amber-700",
+      name: z.name,
+      crop: z.crop || "Unassigned",
+      riskCount: openRisks.length,
+      status:
+        worst === "high" ? "Needs attention" : worst === "moderate" ? "Watch" : "No open risks",
+      barColor:
+        worst === "high" ? "bg-rose-500" : worst === "moderate" ? "bg-amber-400" : "bg-emerald-500",
+      textColor:
+        worst === "high"
+          ? "text-rose-700"
+          : worst === "moderate"
+          ? "text-amber-700"
+          : "text-emerald-700",
+      // Bar reflects risk load, not a health score: full when clear, shorter as risks stack up.
+      barWidth: worst === "high" ? 33 : worst === "moderate" ? 66 : 100,
     };
   });
 
@@ -67,18 +85,22 @@ export function ZoneHealthCard() {
                   </div>
                 </div>
                 <div className="text-right">
-                  <span className="font-extrabold text-slate-900">{item.health}%</span>
+                  {item.riskCount > 0 && (
+                    <span className="font-extrabold text-slate-900">
+                      {item.riskCount} risk{item.riskCount > 1 ? "s" : ""}
+                    </span>
+                  )}
                   <span className={`ml-1.5 text-[11px] font-bold ${item.textColor}`}>
                     {item.status}
                   </span>
                 </div>
               </div>
 
-              {/* Health Progress Bar */}
+              {/* Risk-load indicator (not a measured health score) */}
               <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
                 <div
                   className={`h-full rounded-full ${item.barColor} transition-all duration-500`}
-                  style={{ width: `${item.health}%` }}
+                  style={{ width: `${item.barWidth}%` }}
                 />
               </div>
             </div>

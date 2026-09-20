@@ -84,28 +84,30 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
     }
   };
 
+  const inputStyle = "w-full rounded-xl bg-slate-50 border border-slate-200 py-2 pl-9 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15 outline-none transition-all";
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="auth-modal-title"
     >
-      <div className="w-full max-w-md rounded-2xl border border-[#dfe6dd] bg-white p-6 shadow-xl">
+      <div className="w-full max-w-md rounded-2xl bg-white border border-slate-200 p-6 shadow-2xl animate-fade-in text-slate-800">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-[#edf0eb] pb-3">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <div className="flex items-center gap-2">
-            <span className="grid h-8 w-8 place-items-center rounded-lg bg-forest-100 text-forest-700">
+            <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-600">
               <KeyRound size={16} />
             </span>
-            <h3 id="auth-modal-title" className="text-base font-bold text-ink">
+            <h3 id="auth-modal-title" className="text-base font-bold text-slate-900">
               {currentUser ? "Account & Farm Context" : isSignUp ? "Create FarmOps Account" : "Sign In to FarmOps AI"}
             </h3>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition"
             aria-label="Close dialog"
           >
             <X size={18} />
@@ -115,9 +117,9 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
         {/* Authenticated State */}
         {currentUser ? (
           <div className="mt-5 space-y-5">
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
               <div className="flex items-center gap-3">
-                <span className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-[#1b7340] to-emerald-600 font-extrabold text-white text-base shadow-sm">
+                <span className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-emerald-600 to-teal-500 font-extrabold text-white text-base shadow-md shadow-emerald-600/20">
                   {(() => {
                     const meta = currentUser.user_metadata || {};
                     const name = (meta.full_name as string) || (meta.name as string) || currentUser.email || "U";
@@ -137,20 +139,20 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
                     })()}
                   </p>
                   <p className="truncate text-xs text-slate-500">{currentUser.email}</p>
-                  <p className="text-[11px] text-emerald-800 capitalize font-medium mt-0.5">
-                    Role: <span className="font-semibold text-emerald-900">{currentUser.role}</span>
+                  <p className="text-[11px] text-emerald-700 capitalize font-medium mt-0.5">
+                    Role: <span className="font-semibold text-emerald-800">{currentUser.role}</span>
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* Farm Switcher in Auth Dialog */}
+            {/* Farm Switcher */}
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
                 Accessible Farms ({backendFarms.length})
               </label>
               {backendFarms.length === 0 ? (
-                <p className="text-xs text-slate-500 italic">No operational farms registered under this account.</p>
+                <p className="text-xs text-slate-500 italic">No farms registered under this account.</p>
               ) : (
                 <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                   {backendFarms.map((f) => {
@@ -163,18 +165,18 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
                           await selectFarm(f.id);
                           onClose();
                         }}
-                        className={`w-full flex items-center justify-between rounded-xl px-3.5 py-2.5 text-xs text-left transition-colors border ${
+                        className={`w-full flex items-center justify-between rounded-xl px-3.5 py-2.5 text-xs text-left transition-all border ${
                           isSelected
-                            ? "border-forest-600 bg-forest-50 text-forest-900 font-semibold"
-                            : "border-[#dfe6dd] bg-white text-slate-700 hover:bg-slate-50"
+                            ? "border-emerald-300 bg-emerald-50 text-emerald-800 font-semibold shadow-xs"
+                            : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900"
                         }`}
                       >
                         <span className="flex items-center gap-2 truncate">
-                          <Building2 size={14} className={isSelected ? "text-forest-700" : "text-slate-400"} />
+                          <Building2 size={14} className={isSelected ? "text-emerald-600" : "text-slate-400"} />
                           <span className="truncate">{f.name}</span>
                         </span>
                         {isSelected && (
-                          <span className="rounded-full bg-forest-200/60 px-2 py-0.5 text-[10px] text-forest-800 font-bold">
+                          <span className="rounded-full bg-emerald-100 border border-emerald-200 px-2 py-0.5 text-[10px] text-emerald-800 font-bold">
                             Active
                           </span>
                         )}
@@ -185,12 +187,12 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
               )}
             </div>
 
-            <div className="border-t border-[#edf0eb] pt-4">
+            <div className="border-t border-slate-100 pt-4">
               <button
                 type="button"
                 onClick={handleSignOut}
                 disabled={loading}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-semibold text-rose-800 hover:bg-rose-100 transition-colors"
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 hover:text-rose-800 transition-colors"
               >
                 {loading ? <Loader2 size={14} className="animate-spin" /> : <LogOut size={14} />}
                 Sign Out
@@ -200,8 +202,8 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
         ) : (
           /* Sign In / Sign Up Form */
           <form onSubmit={handleSubmit} className="mt-5 space-y-4">
-            <p className="text-xs text-slate-600 leading-relaxed">
-              Connect to the live FastAPI backend with your Supabase credentials to access authoritative farm and zone data.
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Connect to the live FastAPI backend with your Supabase credentials to access farm data.
             </p>
 
             {errorMsg && (
@@ -230,10 +232,11 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
                   id="auth-email"
                   type="email"
                   required
+                  suppressHydrationWarning
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="operator@farmops.ai"
-                  className="w-full rounded-xl border border-[#dfe6dd] bg-white py-2 pl-9 pr-3 text-xs text-ink placeholder:text-slate-400 focus:border-forest-600 focus:outline-none focus:ring-1 focus:ring-forest-600"
+                  className={inputStyle}
                 />
               </div>
             </div>
@@ -250,10 +253,11 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
                   id="auth-password"
                   type="password"
                   required
+                  suppressHydrationWarning
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full rounded-xl border border-[#dfe6dd] bg-white py-2 pl-9 pr-3 text-xs text-ink placeholder:text-slate-400 focus:border-forest-600 focus:outline-none focus:ring-1 focus:ring-forest-600"
+                  className={inputStyle}
                 />
               </div>
             </div>
@@ -261,7 +265,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
             <button
               type="submit"
               disabled={loading}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-forest-700 px-4 py-2.5 text-xs font-semibold text-white hover:bg-forest-800 transition-colors shadow-2xs disabled:opacity-50"
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-500 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:from-emerald-500 hover:to-emerald-400 transition-all disabled:opacity-50"
             >
               {loading ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
               {isSignUp ? "Register Account" : "Sign In"}
@@ -275,7 +279,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
                   setErrorMsg(null);
                   setSuccessMsg(null);
                 }}
-                className="text-xs text-forest-700 hover:underline font-medium"
+                className="text-xs text-emerald-700 hover:text-emerald-900 hover:underline font-semibold transition"
               >
                 {isSignUp ? "Already have an account? Sign in" : "Need an account? Register with email"}
               </button>

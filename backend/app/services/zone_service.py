@@ -94,3 +94,10 @@ class ZoneService:
         await session.commit()
         await session.refresh(zone)
         return zone
+
+    @staticmethod
+    async def delete_zone(session: AsyncSession, zone_id: str) -> None:
+        """Deletes a zone by ID."""
+        zone = await ZoneService.get_zone(session, zone_id)
+        await session.delete(zone)
+        await session.commit()

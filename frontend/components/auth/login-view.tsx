@@ -773,6 +773,7 @@ function LoginForm({ initialMode }: LoginViewProps) {
                       <input
                         id="fullName"
                         type="text"
+                        suppressHydrationWarning
                         value={fullName}
                         onChange={(e) => setFullName(e.target.value)}
                         placeholder="e.g. Daksh Khamar"
@@ -798,6 +799,7 @@ function LoginForm({ initialMode }: LoginViewProps) {
                       id="email"
                       type="email"
                       required
+                      suppressHydrationWarning
                       value={email}
                       onChange={(e) => {
                         setEmail(e.target.value);
@@ -839,6 +841,7 @@ function LoginForm({ initialMode }: LoginViewProps) {
                         id="password"
                         type={showPassword ? "text" : "password"}
                         required
+                        suppressHydrationWarning
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder={isSignUp ? "Create a password (min 6 characters)" : "Enter your password"}

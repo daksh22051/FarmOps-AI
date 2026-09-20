@@ -111,6 +111,10 @@ class SensorEventService:
         if filter_params.end_time:
             query = query.where(SensorEvent.event_at <= filter_params.end_time)
 
-        query = query.order_by(desc(SensorEvent.event_at)).limit(filter_params.limit)
+        query = (
+            query.order_by(desc(SensorEvent.event_at))
+            .offset(getattr(filter_params, "offset", 0) or 0)
+            .limit(filter_params.limit)
+        )
         res = await session.execute(query)
         return list(res.scalars().all())

@@ -520,13 +520,40 @@ export default function AlertsPage() {
 
           {/* Honest Empty State */}
           {!isLoadingAlerts && !alertsError && alerts.length === 0 && (
-            <Card className="p-12 text-center">
-              <BellOff size={36} className="mx-auto text-slate-300" />
-              <h3 className="mt-3 text-sm font-bold text-ink">No Active Alerts</h3>
-              <p className="mt-1 text-xs text-slate-500 max-w-sm mx-auto">
-                No alerts are recorded for <strong>{selectedFarm?.name || "this farm"}</strong>.
-                Operational notices will appear when sensor thresholds or risk events trigger alarm conditions.
+            <Card className="p-12 text-center flex flex-col items-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400 mb-3 border border-slate-200">
+                <BellOff size={24} />
+              </div>
+              <h3 className="text-base font-bold text-ink">No Active Alerts</h3>
+              <p className="mt-1 text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                All parameters are operating within configured safe thresholds for <strong>{selectedFarm?.name || "this farm"}</strong>. Operational alerts trigger automatically when sensors record anomalous deviations.
               </p>
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                <a
+                  href="/demo"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 transition-all cursor-pointer"
+                >
+                  <Radio size={14} />
+                  <span>Run Demo Scenario</span>
+                </a>
+                <a
+                  href="/dashboard"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 transition-all"
+                >
+                  <span>View Live Dashboard</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab("escalations");
+                    setShowCreateEscalation(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 transition-all cursor-pointer"
+                >
+                  <ShieldAlert size={14} className="text-amber-600" />
+                  <span>Escalate to Expert</span>
+                </button>
+              </div>
             </Card>
           )}
 

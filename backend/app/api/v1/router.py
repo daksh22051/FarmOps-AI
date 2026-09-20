@@ -3,6 +3,7 @@ Aggregates and mounts all v1 API endpoints for the FarmOps AI Backend
 """
 
 from fastapi import APIRouter
+from app.api.v1.endpoints.dashboard import router as dashboard_router
 from app.api.v1.endpoints.health import router as health_router
 from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.farms import router as farms_router
@@ -20,6 +21,7 @@ from app.api.v1.endpoints.audit import router as audit_router
 from app.api.v1.endpoints.demo import router as demo_router
 
 api_v1_router = APIRouter()
+api_v1_router.include_router(dashboard_router)
 
 api_v1_router.include_router(health_router)
 api_v1_router.include_router(auth_router)

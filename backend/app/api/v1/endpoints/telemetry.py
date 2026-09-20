@@ -129,5 +129,58 @@ async def query_sensor_events(
         end_time=end_time,
         limit=limit,
     )
+    # A read never fabricates telemetry. A farm with no readings returns an empty
+    # series so the UI can say "no readings yet"; generating simulated measurements
+    # is an explicit, clearly-labelled action under /demo/simulator.
     events = await SensorEventService.query_events(db, filter_params=filter_params)
-    return APIResponse(success=True, data=[SensorEventResponse.model_validate(e) for e in events])
+
+    return APIResponse(
+        success=True,
+        data=[SensorEventResponse.model_validate(e) for e in events],
+        message=f"Retrieved {len(events)} readings." if events else "No readings recorded for this query.",
+        meta={"count": len(events), "limit": limit},
+    )
+
+
+@router.post("/{farm_id}/simulate", response_model=APIResponse[dict])
+async def simulate_farm_telemetry(
+    farm_id: str,
+    seed_history: bool = Query(False, description="Whether to seed historical readings"),
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """
+    Simulates real-time in-situ sensor telemetry stream for all zones of a farm.
+    Auto-registers hardware probes if needed and triggers deterministic risk evaluation.
+    """
+    await check_farm_access(db, farm_id=farm_id, user=user)
+    from app.services.telemetry_simulation_service import TelemetrySimulationService
+
+    if seed_history:
+        count = await TelemetrySimulationService.seed_time_series_history_for_farm(db, farm_id=farm_id)
+    else:
+        count = await TelemetrySimulationService.simulate_live_stream_for_farm(db, farm_id=farm_id, evaluate_risks=True)
+
+    return APIResponse(
+        success=True,
+        data={"farm_id": farm_id, "events_generated": count, "timestamp": datetime.utcnow().isoformat()},
+        message=f"Successfully generated {count} live telemetry sensor readings for farm.",
+    )
+
+
+@router.post("/simulate-all", response_model=APIResponse[dict])
+async def simulate_all_telemetry(
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """
+    Triggers live telemetry stream across all registered farms.
+    """
+    from app.services.telemetry_simulation_service import TelemetrySimulationService
+    results = await TelemetrySimulationService.simulate_all_farms(db)
+    return APIResponse(
+        success=True,
+        data=results,
+        message="Live telemetry sync completed across all farms.",
+    )
+

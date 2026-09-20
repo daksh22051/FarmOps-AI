@@ -79,6 +79,42 @@ async def detect_deterministic_risks(
     )
 
 
+@router.get("", response_model=APIResponse[List[RiskAssessmentResponse]])
+async def list_risks(
+    farm_id: str = Query(..., description="Farm to list risks for"),
+    zone_id: Optional[str] = Query(None, description="Filter by zone ID"),
+    risk_type: Optional[str] = Query(None, description="Filter by risk type"),
+    severity: Optional[str] = Query(None, description="Filter: low, medium, high, critical"),
+    status: Optional[str] = Query(None, description="Filter: open, acknowledged, resolved, dismissed"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """
+    Risk feed for a farm with status/type/severity filters and pagination.
+
+    This is the PRD's documented collection surface (`GET /risks?farm_id=...`).
+    """
+    await check_farm_access(db, farm_id=farm_id, user=user)
+    risks = await RiskService.get_risks(
+        db,
+        farm_id=farm_id,
+        zone_id=zone_id,
+        risk_type=risk_type,
+        severity=severity,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+    return APIResponse(
+        success=True,
+        data=[RiskAssessmentResponse.model_validate(r) for r in risks],
+        message=f"Retrieved {len(risks)} risk candidates.",
+        meta={"limit": limit, "offset": offset, "count": len(risks)},
+    )
+
+
 @router.get("/detail/{risk_id}", response_model=APIResponse[RiskAssessmentResponse])
 async def get_risk_detail(
     risk_id: str,

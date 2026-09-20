@@ -15,6 +15,46 @@ from app.services.alert_service import AlertService
 from app.core.exceptions import EntityNotFoundException, FarmOpsException
 
 
+# Authoritative task state machine. The PRD requires legal transitions to be
+# enforced on the server, not merely disabled in the UI, so every path that
+# changes a task's status validates against this map.
+TASK_STATUSES = ("pending", "assigned", "approved", "in_progress", "blocked", "completed", "cancelled")
+
+LEGAL_TASK_TRANSITIONS: Dict[str, set] = {
+    "pending": {"assigned", "approved", "in_progress", "blocked", "cancelled"},
+    "assigned": {"approved", "in_progress", "blocked", "cancelled", "pending"},
+    "approved": {"in_progress", "blocked", "cancelled"},
+    "in_progress": {"completed", "blocked", "cancelled"},
+    "blocked": {"in_progress", "assigned", "pending", "cancelled"},
+    # Terminal states: a finished or abandoned task is not reopened. A new task is
+    # created instead, so the audit trail keeps both outcomes.
+    "completed": set(),
+    "cancelled": set(),
+}
+
+
+def assert_legal_task_transition(current: str, target: str) -> None:
+    """Raise unless ``current -> target`` is a permitted task transition."""
+    if current == target:
+        return  # idempotent no-op
+    if target not in TASK_STATUSES:
+        raise FarmOpsException(
+            status_code=422,
+            detail=f"'{target}' is not a valid task status.",
+            code="INVALID_TASK_STATUS",
+        )
+    if target not in LEGAL_TASK_TRANSITIONS.get(current, set()):
+        allowed = sorted(LEGAL_TASK_TRANSITIONS.get(current, set()))
+        raise FarmOpsException(
+            status_code=409,
+            detail=(
+                f"Cannot move a task from '{current}' to '{target}'. "
+                + (f"Allowed from '{current}': {', '.join(allowed)}." if allowed else f"'{current}' is a terminal state.")
+            ),
+            code="ILLEGAL_TASK_TRANSITION",
+        )
+
+
 class TaskService:
     @staticmethod
     async def create_task_for_plan(
@@ -170,16 +210,13 @@ class TaskService:
         notes: Optional[str] = None,
     ) -> Task:
         task = await TaskService.get_task(session, task_id)
-        
-        # Idempotent return if already in_progress
+
+        # The state machine is the single authority on what may follow what, so the
+        # endpoint asks it rather than repeating its own rules. It returns quietly when
+        # the task is already in progress, and raises 409 from a terminal state.
+        assert_legal_task_transition(task.status, "in_progress")
         if task.status == "in_progress":
             return task
-
-        if task.status in ["completed", "cancelled"]:
-            raise FarmOpsException(
-                status_code=400,
-                detail=f"Cannot start task in '{task.status}' state.",
-            )
 
         task.status = "in_progress"
         task.started_at = datetime.now(timezone.utc)
@@ -220,15 +257,12 @@ class TaskService:
     ) -> Task:
         task = await TaskService.get_task(session, task_id)
 
-        # Idempotent return if already completed
+        # Completion is only reachable from `in_progress`. Enforcing it here rather than
+        # in the UI means a task cannot be recorded as done without ever having started,
+        # which would leave the audit trail claiming work that was never tracked.
+        assert_legal_task_transition(task.status, "completed")
         if task.status == "completed":
             return task
-
-        if task.status == "cancelled":
-            raise FarmOpsException(
-                status_code=400,
-                detail="Cannot complete a cancelled task.",
-            )
 
         task.status = "completed"
         task.completed_at = datetime.now(timezone.utc)
@@ -306,15 +340,9 @@ class TaskService:
     ) -> Task:
         task = await TaskService.get_task(session, task_id)
 
-        # Idempotent return if already cancelled
+        assert_legal_task_transition(task.status, "cancelled")
         if task.status == "cancelled":
             return task
-
-        if task.status == "completed":
-            raise FarmOpsException(
-                status_code=400,
-                detail="Cannot cancel a completed task.",
-            )
 
         task.status = "cancelled"
         if reason:
@@ -345,9 +373,76 @@ class TaskService:
         return task
 
     @staticmethod
+    async def transition_status(
+        session: AsyncSession,
+        task_id: str,
+        actor_id: str,
+        target_status: str,
+        note: Optional[str] = None,
+        evidence_url: Optional[str] = None,
+    ) -> Task:
+        """Move a task to ``target_status`` after validating the transition.
+
+        Completing a task records the outcome but deliberately does not resolve the
+        originating risk: the PRD requires reassessment against fresh evidence.
+        """
+        task = await TaskService.get_task(session, task_id)
+        target = str(getattr(target_status, "value", target_status))
+        previous = task.status
+        assert_legal_task_transition(previous, target)
+
+        if previous == target and not note and not evidence_url:
+            return task
+
+        now = datetime.now(timezone.utc)
+        task.status = target
+        if target == "in_progress" and not task.started_at:
+            task.started_at = now
+        if target in ("completed", "cancelled") and not task.completed_at:
+            task.completed_at = now
+        if note:
+            label = "Blocked" if target == "blocked" else target.replace("_", " ").title()
+            task.notes = f"{task.notes or ''}\n{label} note: {note}".strip()
+        if evidence_url:
+            # Evidence is a JSON column; append rather than overwrite so earlier
+            # submissions stay attached to the task.
+            existing = dict(task.evidence or {})
+            attachments = list(existing.get("attachments") or [])
+            attachments.append({"url": evidence_url, "at": now.isoformat(), "by": actor_id, "status": target})
+            existing["attachments"] = attachments
+            task.evidence = existing
+
+        session.add(
+            AuditEvent(
+                farm_id=task.farm_id,
+                entity_type="task",
+                entity_id=task.id,
+                actor_id=actor_id,
+                event_type=f"task_{target}",
+                before_state={"status": previous},
+                after_state={
+                    "status": target,
+                    "note": note,
+                    "evidence_url": evidence_url,
+                },
+                source="user",
+            )
+        )
+
+        await session.commit()
+        await session.refresh(task)
+        return task
+
+    @staticmethod
     async def update_task(session: AsyncSession, task_id: str, actor_id: str, data: TaskUpdate) -> Task:
         task = await TaskService.get_task(session, task_id)
         update_dict = data.model_dump(exclude_unset=True)
+        previous_status = task.status
+
+        # A status change here goes through the same state machine as the
+        # dedicated start/complete/cancel routes; PATCH is not a back door.
+        if "status" in update_dict and update_dict["status"] is not None:
+            assert_legal_task_transition(previous_status, update_dict["status"])
 
         if data.status == "in_progress" and not task.started_at:
             task.started_at = datetime.now(timezone.utc)
@@ -365,6 +460,7 @@ class TaskService:
                 entity_id=task.id,
                 actor_id=actor_id,
                 event_type="task_updated",
+                before_state={"status": previous_status},
                 after_state={"status": task.status},
                 source="user",
             )

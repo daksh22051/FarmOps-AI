@@ -1,3 +1,5 @@
+from functools import lru_cache
+from starlette.concurrency import run_in_threadpool
 """
 Supabase Auth, JWT Verification, Role-Based and Farm-Scoped Authorization
 Cryptographically verifies JWT tokens, resolves user profiles, and enforces farm-scoped permissions.
@@ -64,76 +66,40 @@ class AuthUser:
         return self.role == UserRole.ADMIN.value
 
 
+@lru_cache(maxsize=4)
+def _jwks_client(base_url: str):
+    return jwt.PyJWKClient(f"{base_url}/auth/v1/.well-known/jwks.json", lifespan=300, timeout=10)
+
+
 def decode_supabase_token(token: str) -> Dict[str, Any]:
-    """
-    Decodes and cryptographically validates a Supabase Auth JWT token.
-    Validates token structure, expiration, and signature.
-    Never logs token secrets or credentials.
-    """
+    """Verify signatures and expiry; never trust unverified claims as a fallback."""
     if not token or not isinstance(token, str):
-        raise AuthenticationFailedException(
-            detail="Valid authentication is required",
-            code="AUTHENTICATION_REQUIRED",
-        )
-
-    token = token.strip()
-    secret = settings.SUPABASE_JWT_SECRET or settings.SUPABASE_SECRET_KEY
-    if not secret:
-        logger.error("JWT Secret is not configured in backend settings.")
-        raise AuthenticationFailedException(
-            detail="Authentication configuration missing on server",
-            code="AUTHENTICATION_REQUIRED",
-        )
-
+        raise AuthenticationFailedException(detail="Valid authentication is required", code="AUTHENTICATION_REQUIRED")
     try:
-        unverified_header = jwt.get_unverified_header(token)
-        token_alg = unverified_header.get("alg", "HS256")
-
-        try:
-            if token_alg and token_alg.startswith("HS"):
-                payload = jwt.decode(
-                    token,
-                    secret,
-                    algorithms=[token_alg, "HS256"],
-                    options={"verify_aud": False},
-                )
-            else:
-                # Asymmetric token (RS256, ES256) signed by Supabase Auth JWKS
-                payload = jwt.decode(
-                    token,
-                    options={"verify_signature": False, "verify_aud": False},
-                )
-        except (PyJWTError, ValueError) as exc:
-            # Fallback for tokens signed with asymmetric keys or when secret format differs
-            logger.info(f"Token signature fallback ({exc.__class__.__name__}): extracting claims")
-            payload = jwt.decode(
-                token,
-                options={"verify_signature": False, "verify_aud": False},
-            )
-
-        if "sub" not in payload or not payload["sub"]:
-            raise AuthenticationFailedException(
-                detail="Token payload is missing subject claim",
-                code="AUTHENTICATION_REQUIRED",
-            )
+        token = token.strip()
+        algorithm = jwt.get_unverified_header(token).get("alg")
+        options = {"verify_aud": False, "require": ["sub", "exp"]}
+        if algorithm == "HS256":
+            secret = settings.SUPABASE_JWT_SECRET
+            if not secret:
+                raise ValueError("JWT signing secret is not configured")
+            payload = jwt.decode(token, secret, algorithms=["HS256"], options=options)
+        elif algorithm in {"RS256", "ES256"}:
+            base_url = settings.SUPABASE_URL.rstrip("/")
+            if not base_url:
+                raise ValueError("Supabase URL is not configured")
+            key = _jwks_client(base_url).get_signing_key_from_jwt(token).key
+            payload = jwt.decode(token, key, algorithms=[algorithm],
+                                 issuer=f"{base_url}/auth/v1", options=options)
+        else:
+            raise ValueError("Unsupported signing algorithm")
+        if not payload.get("sub"):
+            raise ValueError("Missing subject")
         return payload
     except ExpiredSignatureError:
-        raise AuthenticationFailedException(
-            detail="Token has expired",
-            code="AUTHENTICATION_REQUIRED",
-        )
-    except (PyJWTError, ValueError) as exc:
-        logger.warning(f"JWT cryptographic validation failed: {exc.__class__.__name__}")
-        raise AuthenticationFailedException(
-            detail="Valid authentication is required",
-            code="AUTHENTICATION_REQUIRED",
-        )
-    except Exception as exc:
-        logger.error(f"Unexpected token validation error: {exc}")
-        raise AuthenticationFailedException(
-            detail="Invalid authentication token format",
-            code="AUTHENTICATION_REQUIRED",
-        )
+        raise AuthenticationFailedException(detail="Token has expired", code="AUTHENTICATION_REQUIRED")
+    except (PyJWTError, ValueError):
+        raise AuthenticationFailedException(detail="Valid authentication is required", code="AUTHENTICATION_REQUIRED")
 
 
 async def get_current_user(
@@ -151,7 +117,7 @@ async def get_current_user(
         )
 
     token = credentials.credentials
-    payload = decode_supabase_token(token)
+    payload = await run_in_threadpool(decode_supabase_token, token)
     user_id = payload["sub"]
 
     # Load profile from database or safely initialize default profile
@@ -216,14 +182,20 @@ def require_role(*allowed_roles: Union[UserRole, str]):
 # FARM-SCOPED AUTHORIZATION & MEMBERSHIP ACCESS HELPERS
 # ==============================================================================
 
-async def get_user_farm_role(db: AsyncSession, farm_id: str, user_id: str) -> Optional[str]:
+async def get_user_farm_role(
+    db: AsyncSession,
+    farm_id: str,
+    user_id: str,
+    farm: Optional[Farm] = None,
+) -> Optional[str]:
     """
     Resolves the effective role of a user for a specific farm.
     Returns 'owner' if user is farm creator/owner, or the role from farm_memberships.
     """
     # 1. Check direct farm ownership
-    farm_res = await db.execute(select(Farm).where(Farm.id == farm_id))
-    farm = farm_res.scalars().first()
+    if farm is None:
+        farm_res = await db.execute(select(Farm).where(Farm.id == farm_id))
+        farm = farm_res.scalars().first()
     if not farm:
         return None
 
@@ -264,8 +236,8 @@ async def check_farm_access(
     if not farm:
         raise EntityNotFoundException("Farm", farm_id)
 
-    # 3. Resolve user's farm role
-    effective_role = await get_user_farm_role(db, farm_id=farm_id, user_id=user.id)
+    # 3. Resolve user's farm role (re-using pre-fetched farm)
+    effective_role = await get_user_farm_role(db, farm_id=farm_id, user_id=user.id, farm=farm)
     if not effective_role:
         logger.warning(f"Cross-farm access blocked: User '{user.id}' has no membership in Farm '{farm_id}'.")
         raise PermissionDeniedException(
@@ -287,6 +259,23 @@ async def check_farm_access(
             )
 
     return effective_role
+
+
+async def get_accessible_farm_ids(db: AsyncSession, user: AuthUser) -> Optional[List[str]]:
+    """Every farm this user may read, as owner or as a member.
+
+    Returns ``None`` for an admin, meaning "no farm restriction". Collection
+    endpoints that accept an optional ``farm_id`` must scope to this list when no
+    farm is given, otherwise they return other tenants' rows.
+    """
+    if user.is_admin:
+        return None
+
+    owned = await db.execute(select(Farm.id).where(Farm.owner_id == user.id))
+    member_of = await db.execute(
+        select(FarmMembership.farm_id).where(FarmMembership.user_id == user.id)
+    )
+    return list({*owned.scalars().all(), *member_of.scalars().all()})
 
 
 # ==============================================================================

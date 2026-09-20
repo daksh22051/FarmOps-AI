@@ -265,21 +265,6 @@ export interface TelemetryEventCreate {
   metadata?: Record<string, unknown> | null;
 }
 
-export interface TelemetryEvent {
-  id: string;
-  device_id: string;
-  farm_id?: string | null;
-  zone_id?: string | null;
-  sequence: number;
-  event_timestamp: string; // ISO-8601
-  received_at?: string | null; // ISO-8601
-  measurements: Record<string, number>;
-  unit_system: string;
-  duplicate: boolean;
-  status: "accepted" | "duplicate" | string;
-  metadata?: Record<string, unknown> | null;
-}
-
 export interface TelemetryEventResponse {
   id: string;
   device_id: string;
@@ -312,6 +297,8 @@ export interface SensorEventResponse {
   schema_version: string;
   is_duplicate: boolean;
   is_delayed: boolean;
+  measurements?: Record<string, number> | null;
+  metadata_payload?: Record<string, unknown> | null;
   // Optional flattened canonical measurements if present
   soil_moisture?: number | null;
   temperature?: number | null;
@@ -458,6 +445,7 @@ export interface AISafetyDecision {
 
 export interface AIEvaluationRequest {
   risk_id: string;
+  require_live?: boolean;
 }
 
 export interface AIEvaluationResponse {
@@ -539,6 +527,8 @@ export interface ActionPlan {
 }
 
 export interface ActionPlanCreate {
+  earliest_at?: string | null;
+  latest_at?: string | null;
   farm_id?: string | null;
   zone_id?: string | null;
   risk_id?: string | null;
@@ -731,16 +721,13 @@ export interface DemoRunResult {
   approval_state?: string | null;
   task_id?: string | null;
   task_status?: string | null;
-  audit_event_ids: string[];
-  alert_ids: string[];
-  reassessment_requested: boolean;
-  execution_log: string[];
-  error_message?: string | null;
+  alert_id?: string | null;
+  timeline_event_id?: string | null;
+  message?: string | null;
 }
 
 export interface DemoStatusResponse {
-  status: "ready" | string;
-  available_scenarios: string[];
-  supported_providers: string[];
-  deterministic_mode: boolean;
+  is_demo_mode: boolean;
+  active_scenarios?: string[];
+  last_demo_run?: DemoRunResult | null;
 }

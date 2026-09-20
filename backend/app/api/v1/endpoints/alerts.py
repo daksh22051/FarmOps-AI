@@ -19,6 +19,23 @@ from app.schemas.common import APIResponse
 router = APIRouter(prefix="/alerts", tags=["Alerts & Alarms"])
 
 
+@router.get("", response_model=APIResponse[List[AlertResponse]])
+async def list_alerts_by_query(
+    farm_id: str = Query(..., description="Farm to list alerts for"),
+    zone_id: Optional[str] = Query(None, description="Filter by zone ID"),
+    severity: Optional[str] = Query(None, description="Filter: info, warning, critical"),
+    acknowledged: Optional[bool] = Query(None, description="Filter by acknowledgment state"),
+    limit: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Alert feed for a farm (PRD: GET /alerts?farm_id=...)."""
+    return await list_alerts(
+        farm_id=farm_id, zone_id=zone_id, severity=severity,
+        acknowledged=acknowledged, limit=limit, db=db, user=user,
+    )
+
+
 @router.get("/{farm_id}", response_model=APIResponse[List[AlertResponse]])
 async def list_alerts(
     farm_id: str,

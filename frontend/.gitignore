@@ -15,3 +15,5 @@ build/
 # Explicitly track frontend/lib despite python root lib/ rule
 !lib/
 !lib/**
+
+.next-backup-*/
